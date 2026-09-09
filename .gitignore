@@ -1,0 +1,15 @@
+# venv
+.venv/
+venv/
+
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+
+# secrets
+.env
+
+# 録音・生成音声
+recordings/
+*.wav
