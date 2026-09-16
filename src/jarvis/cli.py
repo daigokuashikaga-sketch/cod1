@@ -387,10 +387,24 @@ def build_parser() -> argparse.ArgumentParser:
     return parser
 
 
+MISSING_BACKEND_HINT = (
+    "  Put ANTHROPIC_API_KEY in your environment (see .env.example), or set\n"
+    '  agent.backend = "echo" in config.toml to use the offline stand-in.\n'
+    "  Run `jarvis doctor` to see what is configured."
+)
+
+
 def main(argv: Sequence[str] | None = None) -> int:
     parser = build_parser()
     args = parser.parse_args(argv)
-    return int(args.func(args))
+    try:
+        return int(args.func(args))
+    except RuntimeError as exc:
+        # Missing keys and missing optional libraries are configuration problems,
+        # not crashes: say what to do instead of printing a traceback.
+        print(f"jarvis: {exc}", file=sys.stderr)
+        print(MISSING_BACKEND_HINT, file=sys.stderr)
+        return 1
 
 
 if __name__ == "__main__":  # pragma: no cover

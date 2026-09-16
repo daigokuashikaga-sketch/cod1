@@ -61,6 +61,19 @@ def test_memory_remember_requires_a_pair(capsys, tmp_path) -> None:
     assert main(["--config", str(config), "memory", "--remember", "editor"]) == 2
 
 
+def test_a_missing_api_key_is_explained_not_traced(capsys, monkeypatch, tmp_path) -> None:
+    monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+    config = tmp_path / "config.toml"
+    config.write_text(
+        f'[agent]\nbackend = "anthropic"\n\n[memory]\ndb_path = "{tmp_path / "db.sqlite3"}"\n',
+        encoding="utf-8",
+    )
+    assert main(["--config", str(config), "chat"]) == 1
+    err = capsys.readouterr().err
+    assert "ANTHROPIC_API_KEY is not set" in err
+    assert "jarvis doctor" in err
+
+
 def test_a_command_is_required(capsys) -> None:
     with pytest.raises(SystemExit):
         main([])
