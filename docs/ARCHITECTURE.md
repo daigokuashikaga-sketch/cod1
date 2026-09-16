@@ -28,6 +28,7 @@ voice/wakeword.py      openWakeWord / text matcher / always-on
 
 ui/server.py           stdlib HTTP + SSE bridge, loopback only
 ui/web/                the orb: one HTML file, one JS file, no build step
+desktop/src-tauri/     Tauri v2 shell: the window, and nothing else
 ```
 
 ## Three decisions worth explaining
@@ -170,16 +171,32 @@ and it renders correctly inside a transparent always-on-top window. Each FSM
 state maps to a colour, pulse speed and spin rate, eased between states so
 transitions glide.
 
-To make it a real desktop overlay, point a Tauri v2 (or Electron) shell at
-`http://127.0.0.1:8765` with a transparent, always-on-top, click-through window.
-Tauri is the better default in 2026 — 5–15 MB binaries and 30–80 MB RAM against
-Electron's 80–150 MB and 100–300 MB — because it uses the system webview.
+`desktop/` is that shell, in Tauri v2 — the better default in 2026 at 5–15 MB
+binaries and 30–80 MB RAM against Electron's 80–150 MB and 100–300 MB, because
+it uses the system webview. It is thin by construction: it points a webview at
+the core and owns only what a browser cannot do.
+
+Two details are worth knowing. **Click-through** cannot hit-test the DOM from
+Rust, so the shell reproduces the orb's shape instead: a thread samples the
+cursor every 50ms and toggles `set_ignore_cursor_events` on a circle of
+`ORB_RADIUS_RATIO` × the window's short side. That is only truthful because the
+page is loaded with `?mode=orb`, which hides the panel and scales the orb to
+fill the window — so the geometry lives in two files and a test
+(`tests/test_desktop_shell.py`) keeps them in step, along with the port.
+
+**Navigation** is pinned to the core's origin plus the bundled assets. That is
+why the window is built in `setup()` rather than declared with `create: true`:
+`on_navigation` can only be attached to a `WebviewWindowBuilder`. A frameless,
+always-on-top window has no address bar, so it must not be able to show a page
+the user did not ask for.
 
 ## What is not built yet
 
-- **A packaged desktop shell.** The orb runs in a browser today; making it a
-  transparent always-on-top overlay is a Tauri v2 window pointed at
-  `http://127.0.0.1:8765`.
+- **A desktop shell verified on a real display.** `desktop/` compiles clean
+  against Tauri 2.11.5 and passes clippy, but this container has no display, so
+  transparency, always-on-top, corner placement and the click-through radius
+  have never actually been seen. Transparent overlays are compositor-dependent;
+  expect per-platform tuning.
 - **Echo cancellation.** Barge-in works, but if you run speakers loud enough for
   the microphone to hear them, Jarvis will interrupt itself. `suppress_while_
   speaking` covers the wake-word path; real AEC (WebRTC APM) does not ship here.

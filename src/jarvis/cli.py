@@ -215,6 +215,9 @@ def cmd_demo(args: argparse.Namespace) -> int:
     config.proactive.enabled = True
     config.proactive.idle_threshold_s = 0.0
     config.proactive.cooldown_s = 0.0
+    # A demo must show the same thing at 3pm and at midnight, so the one gate
+    # that depends on the wall clock is disabled here (and only here).
+    config.proactive.quiet_hours = None
 
     rng = random.Random(7)
     def noise() -> Frame:

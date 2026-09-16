@@ -1,0 +1,42 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<title>Jarvis</title>
+<style>
+  html, body { height: 100%; margin: 0; background: transparent; color: #7e8ea3;
+               font: 12px ui-sans-serif, system-ui, sans-serif; }
+  body { display: flex; align-items: center; justify-content: center; text-align: center; }
+  .card { padding: 18px; border-radius: 16px; background: rgba(10,14,22,.72);
+          border: 1px solid rgba(120,190,255,.18); max-width: 260px; }
+  code { color: #58c8ff; }
+  .pulse { width: 54px; height: 54px; margin: 0 auto 12px; border-radius: 50%;
+           background: radial-gradient(circle, rgba(140,230,255,.9), rgba(90,180,255,0) 70%);
+           animation: breathe 2.4s ease-in-out infinite; }
+  @keyframes breathe { 0%,100% { transform: scale(.9); opacity: .65 }
+                       50% { transform: scale(1.08); opacity: 1 } }
+</style>
+</head>
+<body>
+  <div class="card">
+    <div class="pulse"></div>
+    <div id="msg">looking for the Jarvis core…</div>
+    <p>start it with<br /><code>jarvis ui</code></p>
+  </div>
+<script>
+  // The shell ships this page so the window is never blank. The moment the
+  // Python core answers, hand the window over to it: the core owns the UI.
+  const CORE = window.__JARVIS_CORE__ || 'http://127.0.0.1:8765';
+  const target = CORE.replace(/\/$/, '') + '/?mode=orb';
+
+  async function attach() {
+    try {
+      const response = await fetch(CORE.replace(/\/$/, '') + '/api/status', { cache: 'no-store' });
+      if (response.ok) { location.replace(target); return; }
+    } catch { /* not up yet */ }
+    setTimeout(attach, 1000);
+  }
+  attach();
+</script>
+</body>
+</html>

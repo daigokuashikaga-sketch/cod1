@@ -38,6 +38,7 @@ jarvis> Noted - neovim.
 | **Remembers** | SQLite chat log + durable facts + embedding recall, all in one file |
 | **Speaks up on its own** | An FSM plus an idle/cooldown/hourly-cap/quiet-hours gate |
 | **Shows itself** | A canvas orb that glows, pulses and spins with the core's state |
+| **Sits on your desktop** | A Tauri shell: frameless, transparent, always-on-top, click-through |
 
 Everything heavy is optional. The core imports with **no third-party
 dependencies at all**, and every backend has an offline stand-in, so you can
@@ -66,6 +67,8 @@ python -m jarvis ui --open   # the orb, at http://127.0.0.1:8765
 python -m jarvis watch       # foreground screen loop, prints every decision
 python -m jarvis estimate    # what the screen loop would cost you per month
 python -m jarvis memory --remember "editor=neovim"
+
+cd desktop/src-tauri && cargo run   # the orb as a desktop overlay (see desktop/README.md)
 ```
 
 Vision and proactive speech are **off by default**. Turn them on in
@@ -131,6 +134,27 @@ captured at all; an allowlist flips the default to deny; and `pause` stops
 capture and speech immediately. A blocked frame never becomes the change
 detector's baseline, so nothing leaks by comparison either.
 
+## On the desktop
+
+`jarvis ui` is enough to use the orb in a browser tab. `desktop/` wraps the same
+page in a [Tauri v2](https://tauri.app) window that floats above everything,
+has no frame, and lets clicks pass through to whatever is behind it — except on
+the orb's own disc.
+
+The shell stays thin on purpose: it points a webview at the core and owns only
+what a browser cannot do (floating, click-through, optionally starting and
+stopping the core). Navigation is pinned to the core's origin, because a
+frameless always-on-top window with no address bar should never be able to show
+an arbitrary page.
+
+```bash
+jarvis ui                          # terminal 1: the core
+cd desktop/src-tauri && cargo run  # terminal 2: the window
+```
+
+See [desktop/README.md](desktop/README.md) — including what has and has not been
+verified.
+
 ## Architecture
 
 ```
@@ -152,7 +176,7 @@ See [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) for the reasoning,
 ## Development
 
 ```bash
-pytest                       # 191 tests, offline, ~5s
+pytest                       # 202 tests, offline, ~5s
 ruff check src tests
 mypy
 ```
@@ -168,8 +192,9 @@ All five phases of the build plan are implemented: scaffold, text+memory, the
 voice loop (microphone → VAD → STT → wake word → TTS → interruptible playback,
 with barge-in), gated screen vision, and the orb UI.
 
-What is *not* done: a packaged desktop shell (the orb runs in a browser),
-acoustic echo cancellation, streaming partial transcripts, and Live2D/VRM
+What is *not* done: the desktop shell compiles and passes clippy but has never
+been launched on a real display, so its window behaviour is unverified;
+acoustic echo cancellation; streaming partial transcripts; and Live2D/VRM
 avatars — see
 [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md#what-is-not-built-yet).
 

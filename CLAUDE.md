@@ -16,6 +16,7 @@ python -m jarvis demo        # end-to-end run on synthetic frames, no API key
 python -m jarvis chat        # interactive text session
 python -m jarvis listen      # hands-free voice conversation (needs a microphone)
 python -m jarvis ui --open   # orb overlay at http://127.0.0.1:8765
+(cd desktop/src-tauri && cargo run)   # the same orb as a desktop overlay window
 python -m jarvis watch       # foreground screen loop, prints every decision
 python -m jarvis estimate    # project the monthly vision bill
 python -m jarvis doctor      # which backends are actually installed
@@ -31,6 +32,7 @@ src/jarvis/
   voice/        mic pump (audio, vad), STT, TTS, playback, wake word -- all optional
   ui/           local HTTP/SSE server + the dependency-free orb page
   cli.py        argparse entry points
+desktop/        Tauri v2 shell: transparent always-on-top window + click-through
 tests/          stdlib-only pytest suite; no network, no display, no API key
 docs/           architecture, costs, configuration
 ```
@@ -67,6 +69,9 @@ docs/           architecture, costs, configuration
 - Comments explain *why* (especially cost and privacy trade-offs), not *what*.
 - Events go on the bus (`bus.publish("vision", ...)`); subsystems never call
   each other directly. The orchestrator owns all wiring.
+- The desktop shell stays thin: window behaviour only, no product logic. Anything
+  it must agree with the core about (port, orb geometry) gets a test in
+  `tests/test_desktop_shell.py` rather than a comment.
 
 ## Where to add things
 
@@ -77,4 +82,5 @@ docs/           architecture, costs, configuration
 | New capture method | `perception/screen.py`, implement `ScreenCapture` |
 | New agent tool | `TOOLS` + `Agent._dispatch` in `core/agent.py` |
 | New UI signal | `bus.publish(...)`, then a case in `ui/web/orb.js` |
+| Window behaviour | `desktop/src-tauri/src/main.rs` (+ a drift test) |
 | New model pricing | `PRICING` in `perception/costs.py` |

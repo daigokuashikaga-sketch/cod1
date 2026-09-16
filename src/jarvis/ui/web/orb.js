@@ -15,6 +15,13 @@ const PALETTE = {
   paused:    { core: [130, 140, 155], ring: [ 80,  90, 105], speed: 0.18, spin: 0.03 },
 };
 
+// The Tauri shell opens this page with ?mode=orb: no chat panel, no footer,
+// just the orb filling a transparent always-on-top window. Keep the drawn
+// radius in step with ORB_RADIUS_RATIO in desktop/src-tauri/src/main.rs --
+// the core is 0.26 of the window's short side and the rings reach 0.42.
+const OVERLAY = new URLSearchParams(location.search).get('mode') === 'orb';
+if (OVERLAY) document.body.classList.add('overlay');
+
 const canvas = document.getElementById('orb');
 const ctx = canvas.getContext('2d');
 const stateLabel = document.getElementById('stateLabel');
@@ -116,6 +123,7 @@ function setState(next) {
 }
 
 function append(who, body, cls) {
+  if (OVERLAY) return;  // nothing to append to: the log is hidden
   const row = document.createElement('div');
   row.className = `msg ${cls || who}`;
   row.innerHTML = `<span class="who"></span><span class="body"></span>`;
@@ -151,7 +159,7 @@ source.onmessage = (e) => {
 };
 source.onerror = () => stateLabel.textContent = 'disconnected';
 
-form.addEventListener('submit', async (e) => {
+if (!OVERLAY) form.addEventListener('submit', async (e) => {
   e.preventDefault();
   const text = input.value.trim();
   if (!text) return;

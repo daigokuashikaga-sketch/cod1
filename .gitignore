@@ -11,5 +11,6 @@ build/
 data/
 *.sqlite3
 *.wav
-src/jarvis/ui/src-tauri/target/
+desktop/src-tauri/target/
+desktop/src-tauri/gen/
 node_modules/

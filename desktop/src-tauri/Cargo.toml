@@ -1,0 +1,19 @@
+[package]
+name = "jarvis-orb"
+version = "0.1.0"
+description = "Transparent always-on-top shell for the Jarvis orb"
+edition = "2021"
+rust-version = "1.77"
+license = "MIT"
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+tauri = { version = "2", features = [] }
+
+[profile.release]
+codegen-units = 1
+lto = true
+opt-level = "s"
+strip = true
