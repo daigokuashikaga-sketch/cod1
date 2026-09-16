@@ -1,0 +1,15 @@
+__pycache__/
+*.py[cod]
+.venv/
+.env
+dist/
+build/
+*.egg-info/
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+data/
+*.sqlite3
+*.wav
+src/jarvis/ui/src-tauri/target/
+node_modules/

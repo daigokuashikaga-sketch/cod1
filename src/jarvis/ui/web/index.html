@@ -1,0 +1,83 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Jarvis</title>
+<style>
+  :root {
+    color-scheme: dark;
+    --bg: rgba(8, 11, 18, 0.72);
+    --panel: rgba(15, 20, 30, 0.82);
+    --line: rgba(120, 190, 255, 0.18);
+    --text: #dfe9f5;
+    --muted: #7e8ea3;
+    --accent: #58c8ff;
+  }
+  * { box-sizing: border-box; }
+  html, body { height: 100%; margin: 0; }
+  body {
+    background: transparent;           /* transparent for the Tauri/Electron overlay */
+    color: var(--text);
+    font: 14px/1.5 ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
+    display: flex; flex-direction: column; align-items: center;
+    gap: 14px; padding: 16px;
+    -webkit-user-select: none; user-select: none;
+  }
+  body.solid { background: radial-gradient(circle at 50% 0%, #10182a, #05070d 70%); }
+  #orb { width: 260px; height: 260px; cursor: grab; }
+  .state {
+    letter-spacing: .18em; text-transform: uppercase; font-size: 11px; color: var(--muted);
+    display: flex; align-items: center; gap: 8px;
+  }
+  .dot { width: 7px; height: 7px; border-radius: 50%; background: var(--accent);
+         box-shadow: 0 0 10px var(--accent); }
+  .panel {
+    width: min(560px, 100%); background: var(--panel); border: 1px solid var(--line);
+    border-radius: 14px; backdrop-filter: blur(12px); overflow: hidden;
+  }
+  #log { max-height: 34vh; overflow-y: auto; padding: 12px 14px; display: flex;
+         flex-direction: column; gap: 10px; }
+  .msg { display: flex; gap: 8px; align-items: baseline; }
+  .msg .who { font-size: 10px; letter-spacing: .12em; text-transform: uppercase;
+              color: var(--muted); min-width: 58px; }
+  .msg.assistant .body { color: #eaf4ff; }
+  .msg.system .body, .msg.vision .body { color: var(--muted); font-style: italic; }
+  .msg .body { white-space: pre-wrap; -webkit-user-select: text; user-select: text; }
+  form { display: flex; border-top: 1px solid var(--line); }
+  input[type=text] {
+    flex: 1; background: transparent; border: 0; padding: 12px 14px;
+    color: var(--text); font: inherit; outline: none;
+  }
+  button {
+    background: transparent; border: 0; border-left: 1px solid var(--line);
+    color: var(--muted); padding: 0 14px; font: inherit; cursor: pointer;
+  }
+  button:hover { color: var(--accent); }
+  footer { display: flex; gap: 16px; font-size: 11px; color: var(--muted); }
+  footer b { color: var(--text); font-weight: 500; }
+</style>
+</head>
+<body>
+  <canvas id="orb" width="520" height="520" aria-label="Jarvis status orb"></canvas>
+  <div class="state"><span class="dot" id="dot"></span><span id="stateLabel">connecting</span></div>
+
+  <div class="panel">
+    <div id="log" role="log" aria-live="polite"></div>
+    <form id="form">
+      <input id="input" type="text" placeholder="Talk to Jarvis…" autocomplete="off" />
+      <button type="submit">Send</button>
+      <button type="button" id="pause" title="Stop watching and speaking">Pause</button>
+    </form>
+  </div>
+
+  <footer>
+    <span>today <b id="spend">$0.0000</b></span>
+    <span>turns <b id="turns">0</b></span>
+    <span>idle <b id="idle">0s</b></span>
+    <span><button type="button" id="bg" style="border:0;padding:0">backdrop</button></span>
+  </footer>
+
+  <script type="module" src="/orb.js"></script>
+</body>
+</html>

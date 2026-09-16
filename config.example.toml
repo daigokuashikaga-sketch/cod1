@@ -1,0 +1,47 @@
+# Copy to config.toml (or ~/.config/jarvis/config.toml) and edit.
+# Environment variables of the form JARVIS_<SECTION>__<FIELD> override this file.
+# Secrets live only in the environment, never here.
+
+[agent]
+backend = "anthropic"          # "anthropic" | "echo" (offline)
+model = "claude-sonnet-5"
+max_tokens = 1024
+history_turns = 20
+cache_system_prompt = true
+# persona = "You are Jarvis, ..."   # see core/config.py for the default
+
+[vision]
+enabled = false                # the only setting that can cost real money
+monitor = 1
+capture_interval_s = 10.0
+max_edge_px = 1024             # downscale before sending; the biggest cost lever
+model = "claude-haiku-4-5-20251001"
+change_threshold = 8           # dHash distance 0-64; higher = fewer escalations
+daily_budget_usd = 1.00
+title_denylist = ["1password", "bitwarden", "keepass", "banking", "authenticator"]
+# title_allowlist = ["code", "terminal"]   # set this to deny everything else
+
+[proactive]
+enabled = false
+idle_threshold_s = 45.0
+cooldown_s = 300.0
+max_per_hour = 6
+quiet_hours = [22, 8]
+
+[voice]
+stt_backend = "null"           # "faster_whisper" once you install jarvis[stt]
+stt_model = "small.en"
+tts_backend = "null"           # "kokoro" (free, local) | "elevenlabs" (paid)
+tts_voice = "af_heart"
+wake_word = "hey jarvis"
+wake_word_enabled = true
+suppress_while_speaking = true
+
+[memory]
+db_path = "data/jarvis.sqlite3"
+embedder = "hashing"
+embedding_dim = 256
+
+[ui]
+host = "127.0.0.1"
+port = 8765
