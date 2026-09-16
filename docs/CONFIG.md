@@ -65,6 +65,19 @@ config *file* are errors, so a typo fails loudly instead of being ignored.
 | `wake_word` | `hey jarvis` | Phrase required to address Jarvis |
 | `wake_word_enabled` | `true` | `false` = always listening |
 | `suppress_while_speaking` | `true` | Stops Jarvis waking itself |
+| `audio_backend` | `null` | `sounddevice` opens a microphone |
+| `player_backend` | `null` | `sounddevice` plays replies aloud |
+| `sample_rate` | `16000` | Microphone rate; Whisper wants 16kHz |
+| `frame_ms` | `30` | VAD frame size |
+| `vad_backend` | `energy` | `energy` (stdlib), `silero`, or `always` |
+| `vad_threshold` | `0.5` | Silero only; EnergyVAD adapts to the room |
+| `start_frames` | `3` | Consecutive speech frames that open an utterance |
+| `pre_roll_ms` | `300` | Audio kept from before it opened, so words aren't clipped |
+| `silence_hangover_ms` | `700` | Quiet needed to close an utterance |
+| `min_speech_ms` | `300` | Shorter bursts are discarded untranscribed |
+| `max_utterance_s` | `15.0` | Hard cut, so a stuck stream can't grow forever |
+| `barge_in` | `true` | Talking over a reply stops playback and reopens the mic |
+| `tts_sample_rate` | `24000` | Kokoro's output rate; must match your TTS backend |
 
 ## `[memory]`
 
@@ -104,6 +117,17 @@ capture_interval_s = 30.0
 max_edge_px = 1024
 change_threshold = 10
 daily_budget_usd = 0.25
+```
+
+**Hands-free voice** — nothing leaves the machine except the reasoning call:
+
+```toml
+[voice]
+audio_backend = "sounddevice"
+player_backend = "sounddevice"
+stt_backend = "faster_whisper"
+tts_backend = "kokoro"
+vad_backend = "silero"
 ```
 
 **Maximum privacy** — only ever looks at your editor and terminal:

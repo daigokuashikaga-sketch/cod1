@@ -37,6 +37,21 @@ wake_word = "hey jarvis"
 wake_word_enabled = true
 suppress_while_speaking = true
 
+# The microphone loop (jarvis listen). "null" means no audio device is opened.
+audio_backend = "null"         # "sounddevice" once you install jarvis[stt]
+player_backend = "null"        # "sounddevice" to actually hear replies
+sample_rate = 16000
+frame_ms = 30
+vad_backend = "energy"         # "energy" (stdlib) | "silero" | "always"
+vad_threshold = 0.5            # Silero only
+start_frames = 3               # consecutive speech frames that open an utterance
+pre_roll_ms = 300              # audio kept from before the utterance opened
+silence_hangover_ms = 700      # quiet needed to close it
+min_speech_ms = 300            # anything shorter is a noise burst
+max_utterance_s = 15.0
+barge_in = true                # talking over a reply stops it
+tts_sample_rate = 24000
+
 [memory]
 db_path = "data/jarvis.sqlite3"
 embedder = "hashing"

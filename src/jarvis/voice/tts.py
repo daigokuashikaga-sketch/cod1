@@ -93,7 +93,11 @@ class ElevenLabsTTS:
 
     def speak(self, text: str) -> bytes:  # pragma: no cover - needs the API
         audio = self._client.text_to_speech.convert(
-            voice_id=self.voice, model_id="eleven_flash_v2_5", text=text
+            voice_id=self.voice,
+            model_id="eleven_flash_v2_5",
+            text=text,
+            # Raw PCM, so AudioPlayer can stream and interrupt it; mp3 could not be.
+            output_format="pcm_24000",
         )
         return b"".join(audio) if not isinstance(audio, bytes) else audio
 

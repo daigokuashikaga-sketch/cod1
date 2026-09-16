@@ -20,8 +20,17 @@ from ..memory.store import MemoryStore
 from ..perception.change import ChangeDetector
 from ..perception.screen import ScreenCapture, build_capture
 from ..perception.vision import ScreenWatcher, TickResult
-from ..voice.stt import STTBackend, build_stt
+from ..voice.audio import (
+    AudioSource,
+    ListenerSettings,
+    NullAudioSource,
+    VoiceListener,
+    build_audio_source,
+)
+from ..voice.playback import AudioPlayer, NullPlayer, build_player
+from ..voice.stt import STTBackend, Transcript, build_stt
 from ..voice.tts import TTSBackend, build_tts
+from ..voice.vad import build_vad
 from ..voice.wakeword import TextWakeWord, WakeWordDetector, build_wake_word
 from .agent import Agent
 from .config import Config
@@ -45,6 +54,7 @@ class Status:
     spend_today: float
     vision_enabled: bool
     proactive_enabled: bool
+    listening: bool
     last_observation: str | None
 
 
@@ -59,6 +69,7 @@ class Jarvis:
         stt: STTBackend,
         wake_word: WakeWordDetector,
         bus: EventBus,
+        player: AudioPlayer | None = None,
         state: StateMachine | None = None,
         gate: ProactiveGate | None = None,
         clock: Callable[[], float] = time.monotonic,
@@ -71,9 +82,11 @@ class Jarvis:
         self.stt = stt
         self.wake_word = wake_word
         self.bus = bus
+        self.player = player or NullPlayer()
         self.state = state or StateMachine(bus, clock=clock)
         self.gate = gate or ProactiveGate(config.proactive, clock=clock)
         self._clock = clock
+        self.listener: VoiceListener | None = None
         self._stop = threading.Event()
         self._threads: list[threading.Thread] = []
 
@@ -113,6 +126,7 @@ class Jarvis:
             agent=agent,
             watcher=watcher,
             tts=build_tts(config.voice.tts_backend, config.voice.tts_voice),
+            player=build_player(config.voice.player_backend),
             stt=build_stt(config.voice.stt_backend, config.voice.stt_model),
             wake_word=build_wake_word(config.voice.wake_word, config.voice.wake_word_enabled),
             bus=bus,
@@ -165,10 +179,79 @@ class Jarvis:
         self.state.try_to(State.SPEAKING, reason="reply")
         if speak:
             try:
-                self.tts.speak(text)
+                audio = self.tts.speak(text)
+                if audio:
+                    # Playback is non-blocking, so barge-in can cut it off.
+                    self.player.play(audio, self.config.voice.tts_sample_rate)
             except Exception as exc:
                 self.bus.publish("error", where="tts", detail=f"{type(exc).__name__}: {exc}")
-        self.state.try_to(State.IDLE, reason="done speaking")
+        # Barge-in may already have moved us to LISTENING; do not stomp on it.
+        if self.state.state is State.SPEAKING:
+            self.state.try_to(State.IDLE, reason="done speaking")
+
+    # -- voice loop --------------------------------------------------------
+
+    def build_listener(self, source: AudioSource | None = None) -> VoiceListener:
+        """Wire the microphone pump to this orchestrator without starting it."""
+        voice = self.config.voice
+        return VoiceListener(
+            source or build_audio_source(voice.audio_backend, voice.sample_rate),
+            build_vad(voice.vad_backend, voice.vad_threshold),
+            self.stt,
+            on_utterance=self._on_utterance,
+            on_speech_start=self._on_speech_start,
+            bus=self.bus,
+            settings=ListenerSettings(
+                sample_rate=voice.sample_rate,
+                frame_ms=voice.frame_ms,
+                start_frames=voice.start_frames,
+                pre_roll_ms=voice.pre_roll_ms,
+                silence_hangover_ms=voice.silence_hangover_ms,
+                min_speech_ms=voice.min_speech_ms,
+                max_utterance_s=voice.max_utterance_s,
+            ),
+        )
+
+    def start_listening(self, source: AudioSource | None = None) -> bool:
+        """Start the microphone loop. Returns False when there is no audio input."""
+        if self.listener is None:
+            self.listener = self.build_listener(source)
+        if isinstance(self.listener.source, NullAudioSource):
+            self.bus.publish("voice", status="unavailable", reason="no audio source configured")
+            return False
+        self.listener.start()
+        self.bus.publish("voice", status="listening")
+        return True
+
+    def stop_listening(self) -> None:
+        if self.listener is not None:
+            self.listener.stop()
+            self.listener = None
+
+    def _on_utterance(self, transcript: Transcript) -> None:
+        """Called by the listener thread once a whole utterance has been heard."""
+        if self.state.state is State.PAUSED:
+            return
+        self.handle_utterance(transcript.text)
+
+    def _on_speech_start(self) -> None:
+        """Called the moment the VAD hears the user, before any transcription.
+
+        This is barge-in: the user talking over a reply stops the reply. The
+        transition is SPEAKING -> LISTENING, which the FSM allows precisely here.
+        """
+        self.gate.note_user_activity()
+        if not self.config.voice.barge_in:
+            return
+        if self.state.state is not State.SPEAKING:
+            return
+        try:
+            self.tts.stop()
+            self.player.stop()
+        except Exception as exc:
+            self.bus.publish("error", where="tts", detail=f"{type(exc).__name__}: {exc}")
+        self.state.try_to(State.LISTENING, reason="barge-in")
+        self.bus.publish("bargein", stopped=True)
 
     # -- perception --------------------------------------------------------
 
@@ -213,6 +296,7 @@ class Jarvis:
 
     def pause(self) -> None:
         """Stop looking and stop talking until resumed. The privacy panic button."""
+        self.player.stop()
         self.state.try_to(State.PAUSED, reason="paused")
         self.bus.publish("paused", paused=True)
 
@@ -241,6 +325,7 @@ class Jarvis:
                 self.bus.publish("error", where="vision-loop", detail=str(exc))
 
     def stop(self) -> None:
+        self.stop_listening()
         self._stop.set()
         for thread in self._threads:
             thread.join(timeout=2.0)
@@ -268,6 +353,7 @@ class Jarvis:
             spend_today=self.memory.spend_today(),
             vision_enabled=self.config.vision.enabled,
             proactive_enabled=self.config.proactive.enabled,
+            listening=self.listener is not None and self.listener.running,
             last_observation=last.summary if last else None,
         )
 

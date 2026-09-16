@@ -138,6 +138,12 @@ source.onmessage = (e) => {
     case 'vision':
       if (ev.summary) append('saw', ev.summary, 'vision');
       break;
+    case 'voice':
+      if (ev.status === 'utterance' && ev.text) { append('you', ev.text); energy = 1; }
+      else if (ev.status === 'speech-start') energy = 1;
+      else if (ev.status === 'unavailable') append('mic', ev.reason, 'system');
+      break;
+    case 'bargein': append('mic', 'interrupted', 'system'); break;
     case 'tool': append('tool', ev.name + (ev.error ? ' (failed)' : ''), 'system'); break;
     case 'error': append('error', `${ev.where}: ${ev.detail}`, 'system'); break;
     case 'paused': setState(ev.paused ? 'paused' : 'idle'); break;
@@ -177,6 +183,7 @@ async function poll() {
     document.getElementById('spend').textContent = '$' + Number(status.spend_today).toFixed(4);
     document.getElementById('turns').textContent = status.turns;
     document.getElementById('idle').textContent = Math.round(status.idle_for) + 's';
+    document.getElementById('mic').textContent = status.listening ? 'on' : 'off';
   } catch { /* the core is down; the SSE handler already says so */ }
   setTimeout(poll, 3000);
 }

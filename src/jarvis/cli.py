@@ -8,9 +8,11 @@ frames and the offline echo backend, so it needs no API key and no display.
 from __future__ import annotations
 
 import argparse
+import array
 import json
 import random
 import sys
+import threading
 import time
 from collections.abc import Sequence
 from pathlib import Path
@@ -23,6 +25,8 @@ from .memory.store import MemoryStore
 from .perception.costs import PRICING, image_tokens, project_monthly
 from .perception.frame import Frame
 from .perception.screen import SyntheticCapture, build_capture
+from .voice.audio import SyntheticAudioSource
+from .voice.stt import ScriptedSTT
 
 BANNER = r"""
    _  __ _ _ ___   __ ___ ___
@@ -37,7 +41,13 @@ def _config(args: argparse.Namespace) -> Config:
 
 
 def _print_event(event: Event) -> None:
-    if event.kind == "vision" and event.payload.get("summary"):
+    if event.kind == "voice" and event.payload.get("status") == "utterance":
+        print(f"\n\033[32myou (heard)>\033[0m {event.payload.get('text', '')}")
+    elif event.kind == "bargein":
+        print("  \033[2m[interrupted]\033[0m")
+    elif event.kind == "reply" and event.payload.get("text"):
+        print(f"\033[36mjarvis>\033[0m {event.payload['text']}")
+    elif event.kind == "vision" and event.payload.get("summary"):
         print(f"  \033[2m[saw] {event.payload['summary']}\033[0m")
     elif event.kind == "proactive" and event.payload.get("spoken"):
         print(f"\n\033[36mjarvis>\033[0m {event.payload.get('text', '')}")
@@ -132,6 +142,45 @@ def cmd_ui(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_listen(args: argparse.Namespace) -> int:
+    """Open the microphone and talk to Jarvis hands-free."""
+    config = _config(args)
+    if args.audio:
+        config.voice.audio_backend = args.audio
+    if args.player:
+        config.voice.player_backend = args.player
+    if config.voice.audio_backend == "null":
+        config.voice.audio_backend = "sounddevice"
+    if config.voice.player_backend == "null":
+        config.voice.player_backend = "sounddevice"
+
+    bus = EventBus()
+    bus.subscribe(_print_event)
+    with Jarvis.from_config(config, bus=bus) as jarvis:
+        if not jarvis.start_listening():
+            print(
+                "jarvis: no microphone available.\n"
+                "  Install the voice extra (pip install 'jarvis[stt]') and check that an\n"
+                "  input device exists. `jarvis doctor` shows what is configured.",
+                file=sys.stderr,
+            )
+            return 1
+        jarvis.start()
+        wake = config.voice.wake_word if config.voice.wake_word_enabled else "(always listening)"
+        print(
+            f"listening - say \"{wake}\" to talk"
+            f"  [stt={jarvis.stt.name} tts={jarvis.tts.name} vad={config.voice.vad_backend}]"
+            "  (ctrl-c to stop)"
+        )
+        stop = threading.Event()
+        try:
+            while not stop.wait(1.0):
+                pass
+        except KeyboardInterrupt:
+            print("\nstopped")
+    return 0
+
+
 def cmd_watch(args: argparse.Namespace) -> int:
     """Run the perception loop in the foreground and print every decision."""
     config = _config(args)
@@ -202,6 +251,9 @@ def cmd_demo(args: argparse.Namespace) -> int:
             ],
             fallback=SILENCE,
         )
+        jarvis.stt = ScriptedSTT(
+            ["hey jarvis, what is my editor?", "just mumbling to myself"]
+        )
         # Canned vision replies so the demo also exercises the proactive path.
         jarvis.watcher.backend = ScriptedBackend(
             [
@@ -216,9 +268,23 @@ def cmd_demo(args: argparse.Namespace) -> int:
         print("you>    my editor is neovim")
         print(f"jarvis> {jarvis.handle_text('my editor is neovim')}")
         jarvis.memory.remember("editor", "neovim")
-        print("you>    hey jarvis, what is my editor?")
-        print(f"jarvis> {jarvis.handle_utterance('hey jarvis, what is my editor?')}")
-        print("(ignored) plain chatter with no wake word ->", jarvis.handle_utterance("mumble"))
+
+        print("\n-- voice (synthetic microphone, no audio device needed) --")
+        heard: list[str] = []
+        bus.subscribe(
+            lambda e: heard.append(e.payload.get("text", ""))
+            if e.kind == "voice" and e.payload.get("status") == "utterance"
+            else None
+        )
+        # Two utterances separated by silence; only the first says the wake word.
+        mic_frames = (
+            _audio(0, 5) + _audio(9000, 20) + _audio(0, 30) + _audio(9000, 20) + _audio(0, 30)
+        )
+        jarvis.build_listener(SyntheticAudioSource(mic_frames)).run()
+        for utterance in heard:
+            print(f"  heard>  {utterance}")
+        print(f"  jarvis> {jarvis.memory.recent_turns()[-1].content}")
+        print("  (the second utterance had no wake word, so it was ignored)")
 
         print("\n-- perception (5 synthetic frames) --")
         for i in range(len(frames)):
@@ -236,6 +302,12 @@ def cmd_demo(args: argparse.Namespace) -> int:
         print(json.dumps(jarvis.status_dict(), indent=2, default=str))
         print(f"\nevents seen: {', '.join(sorted(set(events)))}")
     return 0
+
+
+def _audio(level: int, frames: int, samples: int = 480) -> list[bytes]:
+    """Synthetic int16 mono frames: silence at level 0, speech above it."""
+    wave = array.array("h", [level if i % 2 else -level for i in range(samples)])
+    return [wave.tobytes()] * frames
 
 
 def cmd_estimate(args: argparse.Namespace) -> int:
@@ -320,6 +392,8 @@ def cmd_doctor(args: argparse.Namespace) -> int:
     for label, module, extra in (
         ("stt", "faster_whisper", "jarvis[stt]"),
         ("tts", "kokoro", "jarvis[tts]"),
+        ("audio in/out", "sounddevice", "jarvis[stt]"),
+        ("vad", "silero_vad", "jarvis[stt]"),
         ("wake word", "openwakeword", "jarvis[stt]"),
         ("vectors", "numpy", "jarvis[vectors]"),
     ):
@@ -356,6 +430,11 @@ def build_parser() -> argparse.ArgumentParser:
     ui.add_argument("--port", type=int)
     ui.add_argument("--open", action="store_true", help="open a browser window")
     ui.set_defaults(func=cmd_ui)
+
+    listen = sub.add_parser("listen", help="hands-free voice conversation")
+    listen.add_argument("--audio", help="audio input backend (default: sounddevice)")
+    listen.add_argument("--player", help="audio output backend (default: sounddevice)")
+    listen.set_defaults(func=cmd_listen)
 
     watch = sub.add_parser("watch", help="run the screen loop in the foreground")
     watch.set_defaults(func=cmd_watch)

@@ -9,9 +9,12 @@ $ python -m jarvis demo          # no API key, no display, no microphone needed
 -- conversation --
 you>    my editor is neovim
 jarvis> Noted - neovim.
-you>    hey jarvis, what is my editor?
-jarvis> You use neovim.
-(ignored) plain chatter with no wake word -> None
+
+-- voice (synthetic microphone, no audio device needed) --
+  heard>  hey jarvis, what is my editor?
+  heard>  just mumbling to myself
+  jarvis> You use neovim.
+  (the second utterance had no wake word, so it was ignored)
 
 -- perception (5 synthetic frames) --
   frame 1: observed    first frame
@@ -30,8 +33,8 @@ jarvis> You use neovim.
 | Capability | How |
 |---|---|
 | **Sees your screen** | `mss` capture → downscale → perceptual hash → Claude vision *only* when something changed |
-| **Hears you** | faster-whisper (local, free) behind a `hey jarvis` wake word and a Silero VAD gate |
-| **Talks back** | Kokoro-82M locally (free) or ElevenLabs when you want the expressive voice |
+| **Hears you** | a VAD-gated microphone loop: one transcription per utterance, behind a `hey jarvis` wake word |
+| **Talks back** | Kokoro-82M locally (free) or ElevenLabs — with interruptible playback, so you can talk over it |
 | **Remembers** | SQLite chat log + durable facts + embedding recall, all in one file |
 | **Speaks up on its own** | An FSM plus an idle/cooldown/hourly-cap/quiet-hours gate |
 | **Shows itself** | A canvas orb that glows, pulses and spins with the core's state |
@@ -58,6 +61,7 @@ cp config.example.toml config.toml
 python -m jarvis doctor      # what is actually installed and configured
 python -m jarvis demo        # full pipeline, offline
 python -m jarvis chat        # text conversation (/help for commands)
+python -m jarvis listen      # hands-free voice: wake word in, speech out
 python -m jarvis ui --open   # the orb, at http://127.0.0.1:8765
 python -m jarvis watch       # foreground screen loop, prints every decision
 python -m jarvis estimate    # what the screen loop would cost you per month
@@ -100,6 +104,25 @@ and it requires *all* of: proactive speech enabled, the FSM in `IDLE`, the user
 idle past a threshold, a cooldown elapsed, an hourly cap not reached, and the
 clock outside quiet hours. Then the model still gets to answer `SILENCE`.
 
+## How it hears you
+
+The microphone loop is the screen loop rotated ninety degrees: a cheap local
+gate in front of an expensive step.
+
+```
+frames → VAD (µs) → segmentation → one STT call per utterance → wake word → agent
+```
+
+Nothing is transcribed per frame. An utterance opens after three consecutive
+speech frames (so a cough does not), keeps 300ms of pre-roll (so the first
+syllable is not clipped), closes after 700ms of quiet (so a pause mid-sentence
+does not split it), and is discarded untranscribed if it turns out to be under
+300ms of actual speech.
+
+Talking over a reply stops it: the listener fires `on_speech_start` the moment
+the VAD hears you — before any transcription — and the orchestrator cuts
+playback and moves `SPEAKING → LISTENING`.
+
 ## How it stays private
 
 Screenshots are downscaled before they leave the machine; windows whose title
@@ -129,22 +152,25 @@ See [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) for the reasoning,
 ## Development
 
 ```bash
-pytest                       # 152 tests, offline, ~5s
+pytest                       # 191 tests, offline, ~5s
 ruff check src tests
 mypy
 ```
 
 Tests never touch the network, a display, a microphone or an API key: they use
-`EchoBackend`/`ScriptedBackend`, `SyntheticCapture`, `NullTTS` and injected
-clocks. If a change needs a real service to be tested, the seam is in the wrong
+`EchoBackend`/`ScriptedBackend`, `SyntheticCapture`, `SyntheticAudioSource`,
+`NullTTS` and injected clocks. If a change needs a real service to be tested, the seam is in the wrong
 place.
 
 ## Status
 
-Phases 0–4 of the build plan are implemented: scaffold, text+memory, voice
-plumbing, gated screen vision, and the orb UI. What is *not* done: real audio
-capture wiring (the STT/TTS backends exist, but nothing pumps the microphone
-loop yet), Live2D/VRM avatars, and a packaged desktop shell — see
+All five phases of the build plan are implemented: scaffold, text+memory, the
+voice loop (microphone → VAD → STT → wake word → TTS → interruptible playback,
+with barge-in), gated screen vision, and the orb UI.
+
+What is *not* done: a packaged desktop shell (the orb runs in a browser),
+acoustic echo cancellation, streaming partial transcripts, and Live2D/VRM
+avatars — see
 [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md#what-is-not-built-yet).
 
 MIT licensed.

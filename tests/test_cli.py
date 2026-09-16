@@ -16,6 +16,23 @@ def test_demo_runs_the_whole_pipeline_offline(capsys) -> None:
     assert "over-budget" in out  # and the budget guard held
 
 
+def test_demo_exercises_the_microphone_path(capsys) -> None:
+    assert main(["demo"]) == 0
+    out = capsys.readouterr().out
+    assert "heard>  hey jarvis, what is my editor?" in out
+    assert "no wake word" in out
+
+
+def test_listen_explains_a_missing_microphone(capsys, tmp_path) -> None:
+    config = tmp_path / "config.toml"
+    config.write_text(
+        f'[agent]\nbackend = "echo"\n\n[memory]\ndb_path = "{tmp_path / "db.sqlite3"}"\n',
+        encoding="utf-8",
+    )
+    assert main(["--config", str(config), "listen", "--audio", "null"]) == 1
+    assert "no microphone available" in capsys.readouterr().err
+
+
 def test_estimate_prints_a_projection_per_model(capsys) -> None:
     assert main(["estimate", "--resolution", "1920x1080", "--interval", "10"]) == 0
     out = capsys.readouterr().out

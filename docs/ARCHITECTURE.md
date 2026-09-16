@@ -19,8 +19,11 @@ perception/vision.py   ScreenWatcher: the gated capture -> Claude pipeline
 memory/store.py        SQLite: turns, facts, observations, usage
 memory/embeddings.py   hashing embedder + cosine; swap in a real model if you want
 
+voice/audio.py         AudioSource + VoiceListener: the microphone pump
+voice/vad.py           EnergyVAD (stdlib) / Silero / always-on
 voice/stt.py           faster-whisper / null / scripted
 voice/tts.py           Kokoro / ElevenLabs / null
+voice/playback.py      interruptible PCM output, so barge-in is real
 voice/wakeword.py      openWakeWord / text matcher / always-on
 
 ui/server.py           stdlib HTTP + SSE bridge, loopback only
@@ -74,6 +77,39 @@ never spoken or logged.
 
 This is the difference between a companion and a nuisance, so it lives in one
 small, heavily tested class rather than being spread across the loop.
+
+### 4. The voice loop is the screen loop, rotated
+
+Both loops have the same shape: a cheap local gate in front of an expensive
+step, and one expensive call per *event* rather than per sample.
+
+```
+frames → VAD (µs) → segmentation → one STT call per utterance → wake word → agent
+frames → hash (ms) → change gate  → one vision call per change  → proactive gate → agent
+```
+
+`VoiceListener.poll_once()` processes exactly one frame and holds the entire
+segmentation state machine, so tests drive it directly with synthetic PCM — no
+threads, no sleeps, no microphone. The rules, all counted in frames:
+
+| Rule | Why |
+|---|---|
+| `start_frames` speech frames open an utterance | a cough or a key click should not |
+| `pre_roll_ms` of prior audio is prepended | otherwise the first syllable is clipped |
+| `silence_hangover_ms` of quiet closes it | people pause mid-sentence |
+| under `min_speech_ms` is discarded | never pay to transcribe a door slam |
+| over `max_utterance_s` is cut | a stuck stream must not grow forever |
+
+`EnergyVAD` adapts its noise floor asymmetrically — fast down, slow up. Adapting
+only on frames judged "not speech" deadlocks: a fan sits above the threshold
+forever, so every frame looks like speech and the floor never learns.
+
+Barge-in falls out of this for free. The listener calls `on_speech_start` the
+moment the VAD hears the user — before any transcription — and the orchestrator
+stops the player, stops the TTS backend and moves `SPEAKING → LISTENING`. That
+is why playback is its own seam (`voice/playback.py`) instead of a detail inside
+the TTS backend: `play()` returns immediately and `stop()` cuts mid-sentence, so
+"stop talking" is a real action rather than a flag checked after the fact.
 
 ## State machine
 
@@ -141,13 +177,14 @@ Electron's 80–150 MB and 100–300 MB — because it uses the system webview.
 
 ## What is not built yet
 
-- **The microphone pump.** `voice/stt.py` and `voice/wakeword.py` implement the
-  backends and `handle_utterance` implements the gating, but nothing yet reads
-  an audio device, chunks it through VAD and feeds the transcriber. That is a
-  `sounddevice` loop in a thread calling `jarvis.handle_utterance`.
-- **Barge-in.** The FSM allows `SPEAKING → LISTENING` and `TTSBackend.stop()`
-  exists, but no one calls it mid-utterance yet.
-- **A packaged desktop shell.** The orb runs in a browser today.
+- **A packaged desktop shell.** The orb runs in a browser today; making it a
+  transparent always-on-top overlay is a Tauri v2 window pointed at
+  `http://127.0.0.1:8765`.
+- **Echo cancellation.** Barge-in works, but if you run speakers loud enough for
+  the microphone to hear them, Jarvis will interrupt itself. `suppress_while_
+  speaking` covers the wake-word path; real AEC (WebRTC APM) does not ship here.
+- **Streaming STT.** Transcription happens once per utterance, after the user
+  stops talking. Streaming partial results would cut perceived latency.
 - **Live2D / VRM avatars.** If you want a character rather than an orb, fork
   Open-LLM-VTuber or Project AIRI instead of reimplementing it here.
 - **A local vision pre-filter.** For heavy use, a small local VLM between change

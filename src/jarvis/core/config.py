@@ -93,6 +93,23 @@ class VoiceConfig:
     # Ignore wake-word detections while Jarvis is talking, so it cannot trigger itself.
     suppress_while_speaking: bool = True
 
+    # -- the microphone loop --
+    audio_backend: str = "null"  # "null" | "sounddevice"
+    sample_rate: int = 16_000
+    frame_ms: int = 30
+    vad_backend: str = "energy"  # "energy" | "silero" | "always"
+    vad_threshold: float = 0.5  # Silero only; EnergyVAD adapts to the room
+    # Utterance segmentation, all in milliseconds. See voice/audio.py.
+    start_frames: int = 3
+    pre_roll_ms: int = 300
+    silence_hangover_ms: int = 700
+    min_speech_ms: int = 300
+    max_utterance_s: float = 15.0
+    # Let the user talk over a reply: stops playback and reopens the mic.
+    barge_in: bool = True
+    player_backend: str = "null"  # "null" | "sounddevice"
+    tts_sample_rate: int = 24_000  # Kokoro's output rate
+
 
 @dataclass
 class MemoryConfig:

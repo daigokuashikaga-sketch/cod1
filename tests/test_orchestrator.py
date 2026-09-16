@@ -2,12 +2,13 @@
 
 from __future__ import annotations
 
+import threading
 from datetime import datetime
 from typing import Any
 
 import pytest
 
-from conftest import make_frame
+from conftest import audio_silence, audio_speech, make_frame
 from jarvis.core.agent import Agent
 from jarvis.core.config import Config
 from jarvis.core.events import EventBus
@@ -18,7 +19,8 @@ from jarvis.memory.store import MemoryStore
 from jarvis.perception.change import ChangeDetector
 from jarvis.perception.screen import SyntheticCapture
 from jarvis.perception.vision import ScreenWatcher
-from jarvis.voice.stt import NullSTT
+from jarvis.voice.audio import NullAudioSource, SyntheticAudioSource
+from jarvis.voice.stt import NullSTT, ScriptedSTT
 from jarvis.voice.tts import NullTTS
 from jarvis.voice.wakeword import NullWakeWord, TextWakeWord
 
@@ -332,4 +334,148 @@ def test_start_and_stop_are_safe_when_vision_is_off(config: Config) -> None:
     jarvis, _, _ = build(config)
     jarvis.start()
     jarvis.stop()
+    jarvis.close()
+
+
+# -- the microphone loop ---------------------------------------------------
+
+
+class SpeakingTTS:
+    """A TTS backend that actually returns audio, so playback can be asserted on."""
+
+    name, available = "fake", True
+
+    def __init__(self) -> None:
+        self.spoken: list[str] = []
+        self.stops = 0
+
+    def speak(self, text: str) -> bytes:
+        self.spoken.append(text)
+        return b"\x01\x02" * 16
+
+    def stop(self) -> None:
+        self.stops += 1
+
+
+def test_a_reply_is_handed_to_the_player(config: Config) -> None:
+    jarvis, _, _ = build(config, agent_replies=("spoken aloud",))
+    jarvis.tts = SpeakingTTS()
+    jarvis.handle_text("hello")
+    assert jarvis.player.played == [b"\x01\x02" * 16]
+    jarvis.close()
+
+
+def test_barge_in_stops_the_reply_and_reopens_the_mic(config: Config) -> None:
+    jarvis, _, _ = build(config)
+    jarvis.tts = SpeakingTTS()
+    events: list[dict] = []
+    jarvis.bus.subscribe(lambda e: events.append(e.to_dict()))
+
+    jarvis.state.to(State.THINKING)
+    jarvis.state.to(State.SPEAKING)
+    jarvis._on_speech_start()
+
+    assert jarvis.state.state is State.LISTENING
+    assert jarvis.tts.stops == 1
+    assert jarvis.player.stops == 1
+    assert any(event["kind"] == "bargein" for event in events)
+    jarvis.close()
+
+
+def test_barge_in_can_be_switched_off(config: Config) -> None:
+    config.voice.barge_in = False
+    jarvis, _, _ = build(config)
+    jarvis.tts = SpeakingTTS()
+    jarvis.state.to(State.THINKING)
+    jarvis.state.to(State.SPEAKING)
+    jarvis._on_speech_start()
+    assert jarvis.state.state is State.SPEAKING
+    assert jarvis.player.stops == 0
+    jarvis.close()
+
+
+def test_speech_while_idle_only_resets_the_idle_timer(config: Config) -> None:
+    jarvis, _, clock = build(proactive_config(config))
+    clock.advance(120)
+    assert jarvis.gate.idle_for() == pytest.approx(120)
+    jarvis._on_speech_start()
+    assert jarvis.state.state is State.IDLE
+    assert jarvis.gate.idle_for() == pytest.approx(0.0)
+    jarvis.close()
+
+
+def test_a_barged_reply_does_not_snap_back_to_idle(config: Config) -> None:
+    """Delivery must not stomp on a state the user's interruption just set."""
+
+    class InterruptingTTS(SpeakingTTS):
+        def __init__(self, jarvis_ref: list) -> None:
+            super().__init__()
+            self._ref = jarvis_ref
+
+        def speak(self, text: str) -> bytes:
+            audio = super().speak(text)
+            self._ref[0]._on_speech_start()  # the user talks over the first syllable
+            return audio
+
+    ref: list = []
+    jarvis, _, _ = build(config, agent_replies=("interrupted mid-sentence",))
+    ref.append(jarvis)
+    jarvis.tts = InterruptingTTS(ref)
+    jarvis.handle_text("hello")
+    assert jarvis.state.state is State.LISTENING
+    jarvis.close()
+
+
+def test_start_listening_reports_when_there_is_no_microphone(config: Config) -> None:
+    jarvis, _, _ = build(config)
+    events: list[dict] = []
+    jarvis.bus.subscribe(lambda e: events.append(e.to_dict()))
+    assert jarvis.start_listening(NullAudioSource()) is False
+    assert any(event.get("status") == "unavailable" for event in events)
+    assert jarvis.status_dict()["listening"] is False
+    jarvis.close()
+
+
+def test_spoken_audio_reaches_the_agent_through_the_wake_word(config: Config) -> None:
+    jarvis, tts, _ = build(config, agent_replies=("You use neovim.",))
+    jarvis.stt = ScriptedSTT(["hey jarvis, what is my editor?"])
+    frames = audio_silence(5) + audio_speech(20) + audio_silence(30)
+    listener = jarvis.build_listener(SyntheticAudioSource(frames))
+    listener.run()  # synchronous: drains the frames, then returns
+    assert tts.spoken == ["You use neovim."]
+    assert jarvis.memory.recent_turns()[0].content == "what is my editor?"
+    jarvis.close()
+
+
+def test_spoken_audio_without_the_wake_word_is_ignored(config: Config) -> None:
+    jarvis, tts, _ = build(config)
+    jarvis.stt = ScriptedSTT(["just thinking out loud"])
+    frames = audio_silence(5) + audio_speech(20) + audio_silence(30)
+    jarvis.build_listener(SyntheticAudioSource(frames)).run()
+    assert tts.spoken == []
+    jarvis.close()
+
+
+def test_a_paused_jarvis_ignores_what_it_hears(config: Config) -> None:
+    jarvis, tts, _ = build(config)
+    jarvis.stt = ScriptedSTT(["hey jarvis, are you there?"])
+    jarvis.pause()
+    frames = audio_silence(5) + audio_speech(20) + audio_silence(30)
+    jarvis.build_listener(SyntheticAudioSource(frames)).run()
+    assert tts.spoken == []
+    jarvis.close()
+
+
+def test_the_background_listener_starts_and_stops(config: Config) -> None:
+    jarvis, tts, _ = build(config, agent_replies=("heard you",))
+    jarvis.stt = ScriptedSTT(["hey jarvis, hello"])
+    frames = audio_silence(5) + audio_speech(20) + audio_silence(30)
+    assert jarvis.start_listening(SyntheticAudioSource(frames)) is True
+    for _ in range(300):
+        if tts.spoken:
+            break
+        threading.Event().wait(0.01)
+    jarvis.stop_listening()
+    assert tts.spoken == ["heard you"]
+    assert jarvis.listener is None
     jarvis.close()
