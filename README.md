@@ -129,7 +129,7 @@ See [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) for the reasoning,
 ## Development
 
 ```bash
-pytest                       # 151 tests, offline, ~5s
+pytest                       # 152 tests, offline, ~5s
 ruff check src tests
 mypy
 ```
