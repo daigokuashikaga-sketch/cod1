@@ -13,18 +13,31 @@ from dataclasses import dataclass
 TOKENS_PER_PIXEL_DIVISOR = 750
 
 
+# Cache reads cost about a tenth of base input; writing an entry costs 1.25x
+# (5-minute TTL). Two requests sharing a prefix therefore break even.
+CACHE_READ_MULTIPLIER = 0.1
+CACHE_WRITE_MULTIPLIER = 1.25
+
+# Rough characters-per-token for English prose and JSON. Only used to decide
+# whether a prefix is worth marking cacheable, never for billing.
+CHARS_PER_TOKEN = 4
+
+
 @dataclass(frozen=True)
 class ModelPricing:
     name: str
     input_per_mtok: float
     output_per_mtok: float
     max_image_edge_px: int = 1568
+    # Prefixes shorter than this are silently not cached -- no error, no entry.
+    # The value is model-dependent and NOT monotonic across generations.
+    min_cacheable_tokens: int = 1024
 
 
 PRICING: dict[str, ModelPricing] = {
-    "claude-haiku-4-5-20251001": ModelPricing("claude-haiku-4-5-20251001", 1.0, 5.0, 1568),
-    "claude-sonnet-5": ModelPricing("claude-sonnet-5", 2.0, 10.0, 1568),
-    "claude-opus-5": ModelPricing("claude-opus-5", 5.0, 25.0, 2576),
+    "claude-haiku-4-5-20251001": ModelPricing("claude-haiku-4-5-20251001", 1.0, 5.0, 1568, 4096),
+    "claude-sonnet-5": ModelPricing("claude-sonnet-5", 2.0, 10.0, 1568, 1024),
+    "claude-opus-5": ModelPricing("claude-opus-5", 5.0, 25.0, 2576, 512),
 }
 DEFAULT_PRICING = PRICING["claude-haiku-4-5-20251001"]
 
@@ -53,10 +66,35 @@ def image_cost_usd(width: int, height: int, model: str = DEFAULT_PRICING.name) -
 
 
 def call_cost_usd(
-    input_tokens: int, output_tokens: int, model: str = DEFAULT_PRICING.name
+    input_tokens: int,
+    output_tokens: int,
+    model: str = DEFAULT_PRICING.name,
+    cache_read_tokens: int = 0,
+    cache_write_tokens: int = 0,
 ) -> float:
+    """Cost of one call. Cached tokens are billed at their own multipliers."""
     p = pricing_for(model)
-    return (input_tokens * p.input_per_mtok + output_tokens * p.output_per_mtok) / 1_000_000
+    input_units = (
+        input_tokens
+        + cache_read_tokens * CACHE_READ_MULTIPLIER
+        + cache_write_tokens * CACHE_WRITE_MULTIPLIER
+    )
+    return (input_units * p.input_per_mtok + output_tokens * p.output_per_mtok) / 1_000_000
+
+
+def estimate_tokens(text: str) -> int:
+    """Crude token estimate, used only for cache-worthiness decisions."""
+    return len(text) // CHARS_PER_TOKEN
+
+
+def is_cacheable(prefix: str, model: str = DEFAULT_PRICING.name) -> bool:
+    """Whether marking ``prefix`` with cache_control would actually do anything.
+
+    Below the model's minimum the API accepts the marker and silently caches
+    nothing, so the 1.25x write surcharge would buy an entry that never exists.
+    Checking first is the difference between caching and cargo-culting it.
+    """
+    return estimate_tokens(prefix) >= pricing_for(model).min_cacheable_tokens
 
 
 @dataclass(frozen=True)

@@ -47,13 +47,45 @@ Realistically: 1024px frames, every 30s, 12% escalation rate, on Haiku →
 
 ## What prompt caching does and does not do
 
-Marking the static persona/system prefix with `cache_control` (which
-`AnthropicBackend` does when `agent.cache_system_prompt` is set) makes cache
-reads roughly 90% cheaper for a ~1.25× write surcharge. That is worth having for
-conversation.
+A cache entry is a **byte-exact prefix match** over `tools` → `system` →
+`messages`. Everything before the breakpoint must be identical between requests,
+so Jarvis splits the system prompt in two: the persona (static, marked) and
+everything that moves — the clock, your remembered facts, recalled context
+(after the breakpoint). Putting the time in the cached half is the classic way
+to pay the write surcharge forever and never get a hit.
 
-It does **not** help the screen loop: the screenshot changes every frame, so it
-can never be a cache hit. Caching trims the text overhead; only the change
+**Below a model-dependent minimum, nothing is cached and nothing says so:**
+
+| Model | Minimum cacheable prefix |
+|---|---:|
+| Claude Opus 5 | 512 tokens |
+| Claude Sonnet 5 | 1,024 tokens |
+| Claude Haiku 4.5 | 4,096 tokens |
+
+Jarvis estimates the static prefix (tool definitions + persona) and only sends
+`cache_control` when it clears the model's minimum — otherwise the marker would
+buy a 1.25× write for an entry that never exists. `jarvis doctor` reports which
+case you are in:
+
+```
+ + prompt cache   no-op   static prefix ~336 tokens < 1024 for claude-sonnet-5
+```
+
+That is the honest default position: the shipped persona is ~67 tokens and the
+tools ~270, so **caching does nothing until your static half gets substantial** —
+a long persona, house rules, a style guide. Once it does, reads cost ~0.1× and
+two requests sharing the prefix already beat two uncached ones.
+
+Verify rather than assume — `jarvis memory` prints today's counters:
+
+```
+prompt cache today: 12400 tokens read, 1100 written, over 14 calls
+```
+
+Zero reads across many calls means something is invalidating the prefix.
+
+Caching does **not** help the screen loop at all: the screenshot changes every
+frame, so it can never be a hit. Caching trims text overhead; only the change
 detector trims the dominant image bill.
 
 ## The hard stop

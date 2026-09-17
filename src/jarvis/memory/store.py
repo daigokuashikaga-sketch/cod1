@@ -53,12 +53,14 @@ CREATE TABLE IF NOT EXISTS observations (
 CREATE INDEX IF NOT EXISTS idx_observations_ts ON observations(ts);
 
 CREATE TABLE IF NOT EXISTS usage (
-    day           TEXT NOT NULL,
-    model         TEXT NOT NULL,
-    calls         INTEGER NOT NULL DEFAULT 0,
-    input_tokens  INTEGER NOT NULL DEFAULT 0,
-    output_tokens INTEGER NOT NULL DEFAULT 0,
-    cost_usd      REAL NOT NULL DEFAULT 0.0,
+    day               TEXT NOT NULL,
+    model             TEXT NOT NULL,
+    calls             INTEGER NOT NULL DEFAULT 0,
+    input_tokens      INTEGER NOT NULL DEFAULT 0,
+    output_tokens     INTEGER NOT NULL DEFAULT 0,
+    cost_usd          REAL NOT NULL DEFAULT 0.0,
+    cache_read_tokens  INTEGER NOT NULL DEFAULT 0,
+    cache_write_tokens INTEGER NOT NULL DEFAULT 0,
     PRIMARY KEY (day, model)
 );
 """
@@ -123,7 +125,24 @@ class MemoryStore:
         self._db.execute("PRAGMA synchronous=NORMAL")
         with self._lock:
             self._db.executescript(SCHEMA)
+            self._migrate()
             self._db.commit()
+
+    # Columns added after the first release. SQLite has no "ADD COLUMN IF NOT
+    # EXISTS", so each one is applied only when the table lacks it -- an
+    # existing jarvis.sqlite3 must keep working across an upgrade.
+    MIGRATIONS: tuple[tuple[str, str, str], ...] = (
+        ("usage", "cache_read_tokens", "INTEGER NOT NULL DEFAULT 0"),
+        ("usage", "cache_write_tokens", "INTEGER NOT NULL DEFAULT 0"),
+    )
+
+    def _migrate(self) -> None:
+        for table, column, declaration in self.MIGRATIONS:
+            existing = {
+                row["name"] for row in self._db.execute(f"PRAGMA table_info({table})").fetchall()
+            }
+            if column not in existing:
+                self._db.execute(f"ALTER TABLE {table} ADD COLUMN {column} {declaration}")
 
     # -- lifecycle ---------------------------------------------------------
 
@@ -308,19 +327,52 @@ class MemoryStore:
         return [(float(r["ts"]), r["summary"], r["app"], bool(r["spoken"])) for r in rows]
 
     def record_usage(
-        self, model: str, input_tokens: int, output_tokens: int, cost_usd: float
+        self,
+        model: str,
+        input_tokens: int,
+        output_tokens: int,
+        cost_usd: float,
+        cache_read_tokens: int = 0,
+        cache_write_tokens: int = 0,
     ) -> None:
         with self._lock:
             self._db.execute(
-                "INSERT INTO usage (day, model, calls, input_tokens, output_tokens, cost_usd)"
-                " VALUES (?, ?, 1, ?, ?, ?)"
+                "INSERT INTO usage (day, model, calls, input_tokens, output_tokens, cost_usd,"
+                " cache_read_tokens, cache_write_tokens)"
+                " VALUES (?, ?, 1, ?, ?, ?, ?, ?)"
                 " ON CONFLICT(day, model) DO UPDATE SET calls = calls + 1,"
                 " input_tokens = input_tokens + excluded.input_tokens,"
                 " output_tokens = output_tokens + excluded.output_tokens,"
-                " cost_usd = cost_usd + excluded.cost_usd",
-                (_today(), model, input_tokens, output_tokens, cost_usd),
+                " cost_usd = cost_usd + excluded.cost_usd,"
+                " cache_read_tokens = cache_read_tokens + excluded.cache_read_tokens,"
+                " cache_write_tokens = cache_write_tokens + excluded.cache_write_tokens",
+                (
+                    _today(),
+                    model,
+                    input_tokens,
+                    output_tokens,
+                    cost_usd,
+                    cache_read_tokens,
+                    cache_write_tokens,
+                ),
             )
             self._db.commit()
+
+    def cache_stats(self) -> dict[str, int]:
+        """Today's cache reads and writes. Zero reads across many calls means
+        something is invalidating the prefix -- that is the signal to look for."""
+        with self._lock:
+            row = self._db.execute(
+                "SELECT COALESCE(SUM(cache_read_tokens), 0) AS reads,"
+                " COALESCE(SUM(cache_write_tokens), 0) AS writes,"
+                " COALESCE(SUM(calls), 0) AS calls FROM usage WHERE day = ?",
+                (_today(),),
+            ).fetchone()
+        return {
+            "reads": int(row["reads"]),
+            "writes": int(row["writes"]),
+            "calls": int(row["calls"]),
+        }
 
     def spend_today(self, model: str | None = None) -> float:
         with self._lock:
@@ -340,7 +392,8 @@ class MemoryStore:
     def usage_summary(self, days: int = 7) -> list[dict[str, Any]]:
         with self._lock:
             rows = self._db.execute(
-                "SELECT day, model, calls, input_tokens, output_tokens, cost_usd FROM usage"
+                "SELECT day, model, calls, input_tokens, output_tokens, cost_usd,"
+                " cache_read_tokens, cache_write_tokens FROM usage"
                 " GROUP BY day, model ORDER BY day DESC LIMIT ?",
                 (days * 8,),
             ).fetchall()

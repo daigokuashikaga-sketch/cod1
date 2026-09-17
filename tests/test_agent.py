@@ -73,22 +73,23 @@ def test_persist_false_keeps_the_log_clean(memory: MemoryStore) -> None:
     assert memory.turn_count() == 0
 
 
-def test_facts_are_injected_into_the_system_prompt(memory: MemoryStore) -> None:
+def test_facts_are_injected_into_the_volatile_half(memory: MemoryStore) -> None:
     memory.remember("editor", "neovim")
     prompt = agent(memory, EchoBackend()).system_prompt()
-    assert "editor: neovim" in prompt
+    assert "editor: neovim" in prompt.volatile
+    assert "editor: neovim" not in prompt.static  # would invalidate the cache
 
 
 def test_recalled_context_is_injected_for_the_current_question(memory: MemoryStore) -> None:
     memory.add_turn("user", "the staging deploy script keeps failing")
     prompt = agent(memory, EchoBackend()).system_prompt("deploy script")
-    assert "Possibly relevant" in prompt
-    assert "deploy" in prompt
+    assert "Possibly relevant" in prompt.volatile
+    assert "deploy" in prompt.volatile
 
 
 def test_recent_observations_reach_the_prompt(memory: MemoryStore) -> None:
     memory.record_observation("a failing test run in the terminal")
-    assert "failing test run" in agent(memory, EchoBackend()).system_prompt()
+    assert "failing test run" in agent(memory, EchoBackend()).system_prompt().volatile
 
 
 def test_remember_tool_writes_to_memory(memory: MemoryStore) -> None:
@@ -188,6 +189,7 @@ def test_images_reach_the_backend(memory: MemoryStore) -> None:
     assert backend.calls[0][-1].images
 
 
-def test_system_prompt_is_cacheable_and_stable(memory: MemoryStore) -> None:
+def test_the_static_half_is_exactly_the_persona(memory: MemoryStore) -> None:
     a = agent(memory, EchoBackend())
-    assert a.system_prompt().startswith(a.config.persona)
+    assert a.system_prompt().static == a.config.persona
+    assert a.system_prompt("anything").static == a.config.persona

@@ -11,12 +11,13 @@ tools.
 from __future__ import annotations
 
 import base64
+import json
 import os
 from collections.abc import Sequence
 from dataclasses import dataclass, field
 from typing import Any, Protocol, runtime_checkable
 
-from ..perception.costs import call_cost_usd
+from ..perception.costs import call_cost_usd, is_cacheable
 
 
 @dataclass(frozen=True)
@@ -60,12 +61,39 @@ class Message:
 
 
 @dataclass(frozen=True)
+class SystemPrompt:
+    """A system prompt split at the cache boundary.
+
+    Caching is a prefix match, so everything before the breakpoint must be
+    byte-identical between requests. ``static`` is the persona: long, frozen,
+    worth caching. ``volatile`` is what changes every turn -- the clock,
+    remembered facts, recalled context -- and must come *after* the breakpoint,
+    or it invalidates the entry it is sitting in and the cache never hits.
+    """
+
+    static: str = ""
+    volatile: str = ""
+
+    def text(self) -> str:
+        return "\n\n".join(part for part in (self.static, self.volatile) if part)
+
+    def __str__(self) -> str:
+        return self.text()
+
+
+def as_system_prompt(system: SystemPrompt | str) -> SystemPrompt:
+    return system if isinstance(system, SystemPrompt) else SystemPrompt(static=system)
+
+
+@dataclass(frozen=True)
 class Completion:
     text: str
     model: str
     input_tokens: int = 0
     output_tokens: int = 0
     cost_usd: float = 0.0
+    cache_read_tokens: int = 0
+    cache_write_tokens: int = 0
     stop_reason: str | None = None
     tool_calls: tuple[dict[str, Any], ...] = ()
     raw: Any = field(default=None, repr=False)
@@ -77,7 +105,7 @@ class LLMBackend(Protocol):
 
     def complete(
         self,
-        system: str,
+        system: SystemPrompt | str,
         messages: Sequence[Message],
         *,
         model: str,
@@ -103,7 +131,7 @@ class EchoBackend:
 
     def complete(
         self,
-        system: str,
+        system: SystemPrompt | str,
         messages: Sequence[Message],
         *,
         model: str = "echo",
@@ -141,7 +169,7 @@ class ScriptedBackend:
 
     def complete(
         self,
-        system: str,
+        system: SystemPrompt | str,
         messages: Sequence[Message],
         *,
         model: str = "scripted",
@@ -190,7 +218,7 @@ class AnthropicBackend:
 
     def complete(
         self,
-        system: str,
+        system: SystemPrompt | str,
         messages: Sequence[Message],
         *,
         model: str,
@@ -199,9 +227,13 @@ class AnthropicBackend:
         tools: Sequence[dict[str, Any]] | None = None,
         cache_system: bool = False,
     ) -> Completion:
-        system_blocks: list[dict[str, Any]] = [{"type": "text", "text": system}]
-        if cache_system:
+        prompt = as_system_prompt(system)
+        system_blocks: list[dict[str, Any]] = [{"type": "text", "text": prompt.static}]
+        if cache_system and self.would_cache(prompt.static, model, tools):
             system_blocks[0]["cache_control"] = {"type": "ephemeral"}
+        if prompt.volatile:
+            # After the breakpoint on purpose: this is the part that changes.
+            system_blocks.append({"type": "text", "text": prompt.volatile})
 
         kwargs: dict[str, Any] = {
             "model": model,
@@ -215,6 +247,19 @@ class AnthropicBackend:
 
         response = self._client.messages.create(**kwargs)
         return _completion_from_response(response, model)
+
+    @staticmethod
+    def would_cache(
+        static: str, model: str, tools: Sequence[dict[str, Any]] | None = None
+    ) -> bool:
+        """Whether a breakpoint here would create a real cache entry.
+
+        The cacheable prefix is everything the API renders before the
+        breakpoint -- tools first, then the static system block -- so the tool
+        definitions count toward the model's minimum.
+        """
+        prefix = json.dumps(list(tools)) if tools else ""
+        return is_cacheable(prefix + static, model)
 
 
 def _completion_from_response(response: Any, model: str) -> Completion:
@@ -236,12 +281,16 @@ def _completion_from_response(response: Any, model: str) -> Completion:
     usage = getattr(response, "usage", None)
     input_tokens = int(getattr(usage, "input_tokens", 0) or 0)
     output_tokens = int(getattr(usage, "output_tokens", 0) or 0)
+    cache_read = int(getattr(usage, "cache_read_input_tokens", 0) or 0)
+    cache_write = int(getattr(usage, "cache_creation_input_tokens", 0) or 0)
     return Completion(
         text="\n".join(part for part in text_parts if part).strip(),
         model=getattr(response, "model", model) or model,
         input_tokens=input_tokens,
         output_tokens=output_tokens,
-        cost_usd=call_cost_usd(input_tokens, output_tokens, model),
+        cost_usd=call_cost_usd(input_tokens, output_tokens, model, cache_read, cache_write),
+        cache_read_tokens=cache_read,
+        cache_write_tokens=cache_write,
         stop_reason=getattr(response, "stop_reason", None),
         tool_calls=tuple(tool_calls),
         raw=response,

@@ -18,7 +18,7 @@ from typing import Any
 
 from ..core.config import VisionConfig
 from ..core.events import EventBus
-from ..core.llm import Completion, Image, LLMBackend, Message
+from ..core.llm import Completion, Image, LLMBackend, Message, SystemPrompt
 from ..memory.store import MemoryStore
 from .change import ChangeDetector
 from .costs import image_cost_usd
@@ -45,6 +45,8 @@ class Observation:
     cost_usd: float
     input_tokens: int
     output_tokens: int
+    cache_read_tokens: int
+    cache_write_tokens: int
     model: str
     at: float
 
@@ -133,6 +135,8 @@ class ScreenWatcher:
             observation.input_tokens,
             observation.output_tokens,
             observation.cost_usd,
+            cache_read_tokens=observation.cache_read_tokens,
+            cache_write_tokens=observation.cache_write_tokens,
         )
         return self._result(
             "observed", change.reason, observation=observation, distance=change.distance
@@ -153,7 +157,7 @@ class ScreenWatcher:
     def _describe(self, frame: Frame, title: str | None) -> Observation:
         context = f"Active window: {title}" if title else "Active window: unknown"
         completion: Completion = self.backend.complete(
-            VISION_SYSTEM,
+            SystemPrompt(static=VISION_SYSTEM),
             [Message("user", context, images=(Image(frame.to_png()),))],
             model=self.config.model,
             max_tokens=self.config.max_tokens,
@@ -173,6 +177,8 @@ class ScreenWatcher:
             cost_usd=cost,
             input_tokens=completion.input_tokens,
             output_tokens=completion.output_tokens,
+            cache_read_tokens=completion.cache_read_tokens,
+            cache_write_tokens=completion.cache_write_tokens,
             model=completion.model,
             at=self.clock(),
         )

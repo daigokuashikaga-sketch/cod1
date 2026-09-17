@@ -10,12 +10,13 @@ from __future__ import annotations
 import json
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass
+from datetime import datetime
 from typing import Any
 
 from ..memory.store import MemoryStore, format_context
 from .config import AgentConfig
 from .events import EventBus
-from .llm import Completion, Image, LLMBackend, Message
+from .llm import Completion, Image, LLMBackend, Message, SystemPrompt
 
 TOOLS: list[dict[str, Any]] = [
     {
@@ -83,35 +84,43 @@ class Agent:
         memory: MemoryStore,
         bus: EventBus | None = None,
         screen_describer: Callable[[], str] | None = None,
+        now: Callable[[], datetime] = datetime.now,
     ) -> None:
         self.config = config
         self.backend = backend
         self.memory = memory
         self.bus = bus
         self.screen_describer = screen_describer
+        self.now = now
 
     # -- prompt assembly ---------------------------------------------------
 
-    def system_prompt(self, query: str = "") -> str:
-        """Persona first (static, cacheable), then the volatile memory block."""
-        parts = [self.config.persona]
+    def system_prompt(self, query: str = "") -> SystemPrompt:
+        """Persona in the cacheable half, everything that moves in the other.
+
+        The split is not cosmetic. A cache entry is a byte-exact prefix match,
+        so putting the clock or the user's facts before the breakpoint would
+        invalidate the entry on every single turn: you would pay the 1.25x
+        write surcharge forever and never read a hit.
+        """
+        volatile: list[str] = [f"Right now it is {self.now():%A %d %B %Y, %H:%M} local time."]
 
         facts = self.memory.facts()
         if facts:
             rendered = "\n".join(f"- {fact.key}: {fact.value}" for fact in facts)
-            parts.append(f"What you know about the user:\n{rendered}")
+            volatile.append(f"What you know about the user:\n{rendered}")
 
         if query:
             recalled = self.memory.recall(query, limit=self.memory_recall_limit)
             if recalled:
-                parts.append(f"Possibly relevant from earlier:\n{format_context(recalled)}")
+                volatile.append(f"Possibly relevant from earlier:\n{format_context(recalled)}")
 
         observations = self.memory.recent_observations(limit=3)
         if observations:
             rendered = "\n".join(f"- {summary}" for _, summary, _, _ in observations)
-            parts.append(f"Recent things you noticed on screen:\n{rendered}")
+            volatile.append(f"Recent things you noticed on screen:\n{rendered}")
 
-        return "\n\n".join(parts)
+        return SystemPrompt(static=self.config.persona, volatile="\n\n".join(volatile))
 
     @property
     def memory_recall_limit(self) -> int:
@@ -157,6 +166,8 @@ class Agent:
                 completion.input_tokens,
                 completion.output_tokens,
                 completion.cost_usd,
+                cache_read_tokens=completion.cache_read_tokens,
+                cache_write_tokens=completion.cache_write_tokens,
             )
         if self.bus is not None:
             self.bus.publish(
@@ -164,7 +175,7 @@ class Agent:
             )
         return Reply(text=text, completion=completion, tool_rounds=rounds)
 
-    def _call(self, system: str, messages: Sequence[Message]) -> Completion:
+    def _call(self, system: SystemPrompt, messages: Sequence[Message]) -> Completion:
         return self.backend.complete(
             system,
             messages,

@@ -17,12 +17,19 @@ import time
 from collections.abc import Sequence
 from pathlib import Path
 
+from .core.agent import TOOLS
 from .core.config import Config, load_config
 from .core.events import Event, EventBus
-from .core.llm import ScriptedBackend, build_backend
+from .core.llm import AnthropicBackend, ScriptedBackend, build_backend
 from .core.orchestrator import SILENCE, Jarvis
 from .memory.store import MemoryStore
-from .perception.costs import PRICING, image_tokens, project_monthly
+from .perception.costs import (
+    PRICING,
+    estimate_tokens,
+    image_tokens,
+    pricing_for,
+    project_monthly,
+)
 from .perception.frame import Frame
 from .perception.screen import SyntheticCapture, build_capture
 from .voice.audio import SyntheticAudioSource
@@ -363,6 +370,12 @@ def cmd_memory(args: argparse.Namespace) -> int:
         print(f"db: {config.memory.db_path}")
         print(f"turns: {memory.turn_count()}  sessions: {', '.join(memory.sessions()) or '-'}")
         print(f"spend today: ${memory.spend_today():.4f}")
+        cache = memory.cache_stats()
+        if cache["calls"]:
+            print(
+                f"prompt cache today: {cache['reads']} tokens read, "
+                f"{cache['writes']} written, over {cache['calls']} calls"
+            )
         facts = memory.facts()
         if facts:
             print("facts:")
@@ -383,6 +396,18 @@ def cmd_doctor(args: argparse.Namespace) -> int:
 
     backend = build_backend("auto", config.anthropic_api_key)
     rows.append(("llm backend", backend.name, f"configured: {config.agent.backend}"))
+
+    # Caching fails silently, so say up front whether it can work at all here.
+    minimum = pricing_for(config.agent.model).min_cacheable_tokens
+    estimate = estimate_tokens(json.dumps(TOOLS) + config.agent.persona)
+    if not config.agent.cache_system_prompt:
+        cache_state, cache_note = "off", "agent.cache_system_prompt is false"
+    elif AnthropicBackend.would_cache(config.agent.persona, config.agent.model, TOOLS):
+        cache_state, cache_note = "on", f"static prefix ~{estimate} tokens >= {minimum} minimum"
+    else:
+        cache_state = "no-op"
+        cache_note = f"static prefix ~{estimate} tokens < {minimum} for {config.agent.model}"
+    rows.append(("prompt cache", cache_state, cache_note))
 
     capture = build_capture("auto")
     rows.append((
