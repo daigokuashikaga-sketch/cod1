@@ -23,6 +23,20 @@ def test_demo_exercises_the_microphone_path(capsys) -> None:
     assert "no wake word" in out
 
 
+def test_run_starts_every_subsystem_it_can(capsys, tmp_path) -> None:
+    config = tmp_path / "config.toml"
+    config.write_text(
+        f'[agent]\nbackend = "echo"\n\n[memory]\ndb_path = "{tmp_path / "db.sqlite3"}"\n',
+        encoding="utf-8",
+    )
+    argv = ["--config", str(config), "run", "--no-ui", "--no-voice", "--duration", "0.1"]
+    assert main(argv) == 0
+    out = capsys.readouterr().out
+    assert "jarvis running:" in out
+    assert "screen off" in out  # vision is off by default and says so
+    assert "mic off" in out
+
+
 def test_listen_explains_a_missing_microphone(capsys, tmp_path) -> None:
     config = tmp_path / "config.toml"
     config.write_text(

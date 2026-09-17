@@ -105,6 +105,14 @@ threads, no sleeps, no microphone. The rules, all counted in frames:
 only on frames judged "not speech" deadlocks: a fan sits above the threshold
 forever, so every frame looks like speech and the floor never learns.
 
+**Half duplex by default.** While Jarvis speaks, the orchestrator closes the
+microphone (`microphone_is_open()`) for the length of the audio plus a short
+resume tail, and the listener drops those frames without even showing them to
+the VAD — speaker bleed would otherwise drag its noise floor up for minutes.
+This is not echo cancellation; it is avoiding the problem. The trade is that
+barge-in is off unless `voice.duplex = "full"`, which is the right setting with
+headphones and the wrong one with speakers.
+
 Barge-in falls out of this for free. The listener calls `on_speech_start` the
 moment the VAD hears the user — before any transcription — and the orchestrator
 stops the player, stops the TTS backend and moves `SPEAKING → LISTENING`. That
@@ -144,6 +152,25 @@ mic ─► VAD ─► STT ─► wake word ─► orchestrator.handle_utterance
                                         ▼
                                     TTS ─► speakers        orb.js repaints
 ```
+
+## Prompt caching
+
+The system prompt is a `SystemPrompt(static, volatile)`. Caching is a byte-exact
+prefix match over `tools` → `system` → `messages`, so the persona goes in
+`static` (marked with `cache_control`) and everything that moves — the clock,
+facts, recalled context, recent observations — goes in `volatile`, after the
+breakpoint. A timestamp in the cached half is the textbook way to pay the 1.25×
+write surcharge on every turn and never read a hit.
+
+The second trap is quieter: below a model-dependent minimum (512 / 1,024 /
+4,096 tokens depending on the model) the API accepts the marker and caches
+nothing. `AnthropicBackend.would_cache()` estimates the rendered prefix — tool
+definitions included, since they render first — and only sends the breakpoint
+when it clears the minimum. Measured on the shipped defaults, the persona
+(~67 tokens) plus tools (~270) does not reach any model's minimum, so caching
+correctly does nothing until the static half grows. `cache_read_input_tokens` /
+`cache_creation_input_tokens` are recorded per day and surfaced by
+`jarvis memory` and `jarvis doctor`.
 
 ## Memory
 
@@ -197,9 +224,9 @@ the user did not ask for.
   transparency, always-on-top, corner placement and the click-through radius
   have never actually been seen. Transparent overlays are compositor-dependent;
   expect per-platform tuning.
-- **Echo cancellation.** Barge-in works, but if you run speakers loud enough for
-  the microphone to hear them, Jarvis will interrupt itself. `suppress_while_
-  speaking` covers the wake-word path; real AEC (WebRTC APM) does not ship here.
+- **Echo cancellation.** Half duplex sidesteps self-interruption by closing the
+  mic while speaking, but real AEC (WebRTC APM) is what would let `duplex =
+  "full"` work on speakers rather than only on headphones.
 - **Streaming STT.** Transcription happens once per utterance, after the user
   stops talking. Streaming partial results would cut perceived latency.
 - **Live2D / VRM avatars.** If you want a character rather than an orb, fork

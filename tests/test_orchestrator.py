@@ -345,13 +345,14 @@ class SpeakingTTS:
 
     name, available = "fake", True
 
-    def __init__(self) -> None:
+    def __init__(self, seconds: float = 0.0, sample_rate: int = 24_000) -> None:
         self.spoken: list[str] = []
         self.stops = 0
+        self._frames = int(seconds * sample_rate) or 16
 
     def speak(self, text: str) -> bytes:
         self.spoken.append(text)
-        return b"\x01\x02" * 16
+        return b"\x01\x02" * self._frames
 
     def stop(self) -> None:
         self.stops += 1
@@ -478,4 +479,88 @@ def test_the_background_listener_starts_and_stops(config: Config) -> None:
     jarvis.stop_listening()
     assert tts.spoken == ["heard you"]
     assert jarvis.listener is None
+    jarvis.close()
+
+
+# -- half duplex: not hearing itself ---------------------------------------
+
+
+def test_the_microphone_closes_while_jarvis_speaks(config: Config) -> None:
+    jarvis, _, clock = build(config, agent_replies=("a two second answer",))
+    jarvis.tts = SpeakingTTS(seconds=2.0)
+    assert jarvis.microphone_is_open() is True
+
+    jarvis.handle_text("hello")
+    assert jarvis.microphone_is_open() is False  # two seconds of audio are playing
+    assert jarvis.status_dict()["microphone_open"] is False
+
+    clock.advance(2.0)
+    assert jarvis.microphone_is_open() is False  # still inside the resume tail
+    clock.advance(config.voice.mic_resume_ms / 1000.0)
+    assert jarvis.microphone_is_open() is True
+    jarvis.close()
+
+
+def test_jarvis_does_not_transcribe_its_own_voice(config: Config) -> None:
+    """The failure this prevents: speakers -> mic -> "someone is talking"."""
+    jarvis, _, _ = build(config, agent_replies=("answering at length",))
+    jarvis.tts = SpeakingTTS(seconds=2.0)
+    jarvis.stt = ScriptedSTT(["this is jarvis hearing itself"])
+    jarvis.handle_text("hello")
+
+    # Loud audio arriving while the reply plays: the room hearing the speakers.
+    listener = jarvis.build_listener(
+        SyntheticAudioSource(audio_silence(5) + audio_speech(20) + audio_silence(30))
+    )
+    listener.run()
+    assert jarvis.memory.turn_count() == 2  # just the typed turn and its reply
+    jarvis.close()
+
+
+def test_full_duplex_keeps_the_microphone_live(config: Config) -> None:
+    config.voice.duplex = "full"
+    jarvis, _, _ = build(config, agent_replies=("answering", "heard you"))
+    jarvis.tts = SpeakingTTS(seconds=2.0)
+    jarvis.stt = ScriptedSTT(["hey jarvis, stop"])
+    jarvis.handle_text("hello")
+    assert jarvis.microphone_is_open() is True
+
+    listener = jarvis.build_listener(
+        SyntheticAudioSource(audio_silence(5) + audio_speech(20) + audio_silence(30))
+    )
+    listener.run()
+    assert jarvis.memory.recent_turns()[-1].content == "heard you"
+    jarvis.close()
+
+
+def test_an_open_utterance_is_dropped_when_the_mic_closes(config: Config) -> None:
+    jarvis, _, _ = build(config)
+    jarvis.stt = ScriptedSTT(["half an utterance"])
+    events: list[dict] = []
+    jarvis.bus.subscribe(lambda e: events.append(e.to_dict()))
+
+    open_mic = [True]
+    listener = jarvis.build_listener(
+        SyntheticAudioSource(audio_silence(3) + audio_speech(30) + audio_silence(30))
+    )
+    listener.is_open = lambda: open_mic[0]
+    for _ in range(10):  # let an utterance open
+        listener.poll_once()
+    assert listener.capturing is True
+
+    open_mic[0] = False  # Jarvis starts speaking mid-sentence
+    assert listener.poll_once() is None
+    assert listener.capturing is False
+    assert any(event.get("status") == "dropped" for event in events)
+    jarvis.close()
+
+
+def test_pausing_reopens_the_microphone_gate(config: Config) -> None:
+    jarvis, _, _ = build(config, agent_replies=("long answer",))
+    jarvis.tts = SpeakingTTS(seconds=5.0)
+    jarvis.handle_text("hello")
+    assert jarvis.microphone_is_open() is False
+    jarvis.pause()
+    jarvis.resume()
+    assert jarvis.microphone_is_open() is True
     jarvis.close()

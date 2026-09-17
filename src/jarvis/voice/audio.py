@@ -163,6 +163,7 @@ class VoiceListener:
         on_speech_start: Callable[[], Any] | None = None,
         bus: EventBus | None = None,
         settings: ListenerSettings | None = None,
+        is_open: Callable[[], bool] | None = None,
     ) -> None:
         self.source = source
         self.vad = vad
@@ -171,6 +172,8 @@ class VoiceListener:
         self.on_speech_start = on_speech_start
         self.bus = bus
         self.settings = settings or ListenerSettings()
+        # Half duplex: the orchestrator closes the mic while Jarvis speaks.
+        self.is_open = is_open
         self.exhausted = False
 
         self._pre_roll: deque[bytes] = deque(maxlen=self.settings.pre_roll_frames)
@@ -195,6 +198,15 @@ class VoiceListener:
         if frame is None or not frame:
             self.exhausted = True
             return self._finalize("stream ended") if self._active else None
+
+        if self.is_open is not None and not self.is_open():
+            # Drain the device but ignore what it heard: this is Jarvis's own
+            # voice coming back through the speakers. Feeding it to the VAD
+            # would also drag its noise floor up for minutes afterwards.
+            if self._active:
+                self._reset_segment()
+                self._publish("dropped", reason="microphone closed while speaking")
+            return None
 
         speech = self.vad.is_speech(frame, self.settings.sample_rate)
 

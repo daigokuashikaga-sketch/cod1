@@ -12,6 +12,7 @@ uv sync --extra dev          # or: pip install -e '.[dev]'
 pytest                       # whole suite, offline, no API key
 ruff check src tests         # lint
 mypy                         # types
+python -m jarvis run         # everything at once: orb + screen loop + microphone
 python -m jarvis demo        # end-to-end run on synthetic frames, no API key
 python -m jarvis chat        # interactive text session
 python -m jarvis listen      # hands-free voice conversation (needs a microphone)
@@ -53,6 +54,12 @@ docs/           architecture, costs, configuration
 - The voice loop mirrors the screen loop: a cheap local gate (VAD) in front of
   the expensive step (STT), one transcription per utterance, never per frame.
   Segmentation is counted in frames so it is testable without a clock.
+- Half duplex is the default: the mic is closed while Jarvis speaks, so it
+  cannot hear itself and interrupt its own reply. Barge-in needs
+  `voice.duplex = "full"`, which needs headphones.
+- Prompt caching is a byte-exact prefix match. Anything that changes per turn
+  goes in `SystemPrompt.volatile`, never `static`, and a breakpoint is only sent
+  when the prefix clears the model's minimum (see `is_cacheable`).
 - Money: anything that can spend it must be off by default, capped by
   `vision.daily_budget_usd`, and recorded through `MemoryStore.record_usage`.
 - Privacy: screenshots are downscaled before leaving the machine, sensitive

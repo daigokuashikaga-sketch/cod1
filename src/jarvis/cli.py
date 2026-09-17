@@ -149,6 +149,71 @@ def cmd_ui(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_run(args: argparse.Namespace) -> int:
+    """Everything at once: the orb, the screen loop and the microphone.
+
+    Each subsystem is optional and reports whether it actually came up, so a
+    machine with no microphone or no display still gets a working companion
+    rather than a stack trace.
+    """
+    from .ui.server import UIServer
+
+    config = _config(args)
+    if args.voice and config.voice.audio_backend == "null":
+        config.voice.audio_backend = "sounddevice"
+        if config.voice.player_backend == "null":
+            config.voice.player_backend = "sounddevice"
+
+    bus = EventBus()
+    bus.subscribe(_print_event)
+    started: list[str] = []
+    server: UIServer | None = None
+
+    with Jarvis.from_config(config, bus=bus) as jarvis:
+        if args.ui:
+            server = UIServer(
+                jarvis,
+                bus,
+                host=args.host or config.ui.host,
+                port=args.port if args.port is not None else config.ui.port,
+            )
+            server.start()
+            started.append(f"orb {server.url}")
+
+        if config.vision.enabled:
+            jarvis.start()
+            started.append(f"screen every {config.vision.capture_interval_s:g}s")
+        else:
+            started.append("screen off (vision.enabled = false)")
+
+        if args.voice:
+            if jarvis.start_listening():
+                duplex = config.voice.duplex
+                started.append(f"mic {config.voice.wake_word!r} ({duplex} duplex)")
+            else:
+                started.append("mic unavailable (see `jarvis doctor`)")
+        else:
+            started.append("mic off")
+
+        print("jarvis running:")
+        for line in started:
+            print(f"  - {line}")
+        print("  ctrl-c to stop")
+
+        stop = threading.Event()
+        deadline = time.monotonic() + args.duration if args.duration else None
+        try:
+            while not stop.wait(0.5):
+                if deadline is not None and time.monotonic() >= deadline:
+                    break
+        except KeyboardInterrupt:
+            print("\nstopping")
+        finally:
+            if server is not None:
+                server.stop()
+    return 0
+
+
 def cmd_listen(args: argparse.Namespace) -> int:
     """Open the microphone and talk to Jarvis hands-free."""
     config = _config(args)
@@ -458,6 +523,16 @@ def build_parser() -> argparse.ArgumentParser:
     ui.add_argument("--port", type=int)
     ui.add_argument("--open", action="store_true", help="open a browser window")
     ui.set_defaults(func=cmd_ui)
+
+    run = sub.add_parser("run", help="orb + screen loop + microphone, all at once")
+    run.add_argument("--host")
+    run.add_argument("--port", type=int)
+    run.add_argument("--no-ui", dest="ui", action="store_false", help="skip the orb server")
+    run.add_argument("--no-voice", dest="voice", action="store_false", help="skip the microphone")
+    run.add_argument(
+        "--duration", type=float, default=0.0, help="stop after N seconds (0 = run until ctrl-c)"
+    )
+    run.set_defaults(func=cmd_run, ui=True, voice=True)
 
     listen = sub.add_parser("listen", help="hands-free voice conversation")
     listen.add_argument("--audio", help="audio input backend (default: sounddevice)")

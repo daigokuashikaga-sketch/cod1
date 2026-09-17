@@ -105,7 +105,14 @@ class VoiceConfig:
     silence_hangover_ms: int = 700
     min_speech_ms: int = 300
     max_utterance_s: float = 15.0
+    # "half": the microphone is closed while Jarvis is speaking, so it cannot
+    # hear itself through the speakers and interrupt its own reply. "full"
+    # keeps the mic live -- only sensible with headphones or real echo
+    # cancellation, but it is what makes barge_in do anything.
+    duplex: str = "half"
+    mic_resume_ms: int = 400  # extra quiet after playback before reopening
     # Let the user talk over a reply: stops playback and reopens the mic.
+    # Requires duplex = "full"; with half duplex there is nothing listening.
     barge_in: bool = True
     player_backend: str = "null"  # "null" | "sounddevice"
     tts_sample_rate: int = 24_000  # Kokoro's output rate

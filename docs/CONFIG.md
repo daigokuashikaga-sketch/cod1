@@ -76,7 +76,9 @@ config *file* are errors, so a typo fails loudly instead of being ignored.
 | `silence_hangover_ms` | `700` | Quiet needed to close an utterance |
 | `min_speech_ms` | `300` | Shorter bursts are discarded untranscribed |
 | `max_utterance_s` | `15.0` | Hard cut, so a stuck stream can't grow forever |
-| `barge_in` | `true` | Talking over a reply stops playback and reopens the mic |
+| `duplex` | `half` | `half` closes the mic while speaking; `full` keeps it live (headphones) |
+| `mic_resume_ms` | `400` | Quiet tail after playback before the mic reopens |
+| `barge_in` | `true` | Talking over a reply stops playback — requires `duplex = "full"` |
 | `tts_sample_rate` | `24000` | Kokoro's output rate; must match your TTS backend |
 
 ## `[memory]`
@@ -128,6 +130,15 @@ player_backend = "sounddevice"
 stt_backend = "faster_whisper"
 tts_backend = "kokoro"
 vad_backend = "silero"
+```
+
+**Headphones, with interruption** — the mic stays live while Jarvis talks, so you
+can cut it off mid-sentence. On speakers this makes it interrupt *itself*:
+
+```toml
+[voice]
+duplex = "full"
+barge_in = true
 ```
 
 **Maximum privacy** — only ever looks at your editor and terminal:

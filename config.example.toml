@@ -49,7 +49,10 @@ pre_roll_ms = 300              # audio kept from before the utterance opened
 silence_hangover_ms = 700      # quiet needed to close it
 min_speech_ms = 300            # anything shorter is a noise burst
 max_utterance_s = 15.0
-barge_in = true                # talking over a reply stops it
+duplex = "half"                # "half": mic closed while speaking (no self-interruption)
+                               # "full": mic stays live -- headphones only
+mic_resume_ms = 400            # quiet tail after playback before reopening
+barge_in = true                # talking over a reply stops it (needs duplex = "full")
 tts_sample_rate = 24000
 
 [memory]

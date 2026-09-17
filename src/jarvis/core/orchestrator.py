@@ -55,6 +55,7 @@ class Status:
     vision_enabled: bool
     proactive_enabled: bool
     listening: bool
+    microphone_open: bool
     last_observation: str | None
 
 
@@ -87,6 +88,8 @@ class Jarvis:
         self.gate = gate or ProactiveGate(config.proactive, clock=clock)
         self._clock = clock
         self.listener: VoiceListener | None = None
+        # Monotonic time until which the microphone stays closed (half duplex).
+        self._mic_closed_until = 0.0
         self._stop = threading.Event()
         self._threads: list[threading.Thread] = []
 
@@ -183,6 +186,8 @@ class Jarvis:
                 if audio:
                     # Playback is non-blocking, so barge-in can cut it off.
                     self.player.play(audio, self.config.voice.tts_sample_rate)
+                    seconds = len(audio) / (2 * max(1, self.config.voice.tts_sample_rate))
+                    self.close_microphone_for(seconds)
             except Exception as exc:
                 self.bus.publish("error", where="tts", detail=f"{type(exc).__name__}: {exc}")
         # Barge-in may already have moved us to LISTENING; do not stomp on it.
@@ -201,6 +206,7 @@ class Jarvis:
             on_utterance=self._on_utterance,
             on_speech_start=self._on_speech_start,
             bus=self.bus,
+            is_open=self.microphone_is_open,
             settings=ListenerSettings(
                 sample_rate=voice.sample_rate,
                 frame_ms=voice.frame_ms,
@@ -211,6 +217,25 @@ class Jarvis:
                 max_utterance_s=voice.max_utterance_s,
             ),
         )
+
+    def microphone_is_open(self) -> bool:
+        """Whether the mic should be listened to right now.
+
+        With half duplex it is closed while Jarvis speaks, plus a short tail
+        for the speakers to settle. Without this, a companion on speakers hears
+        its own voice, decides someone is talking, and interrupts itself -- the
+        one bug that makes a voice assistant unusable in a room.
+        """
+        if self.config.voice.duplex != "half":
+            return True
+        if self.player.is_playing:
+            return False
+        return self._clock() >= self._mic_closed_until
+
+    def close_microphone_for(self, seconds: float) -> None:
+        """Keep the mic shut for the length of a reply plus the resume tail."""
+        tail = self.config.voice.mic_resume_ms / 1000.0
+        self._mic_closed_until = max(self._mic_closed_until, self._clock() + seconds + tail)
 
     def start_listening(self, source: AudioSource | None = None) -> bool:
         """Start the microphone loop. Returns False when there is no audio input."""
@@ -239,6 +264,8 @@ class Jarvis:
 
         This is barge-in: the user talking over a reply stops the reply. The
         transition is SPEAKING -> LISTENING, which the FSM allows precisely here.
+        With half duplex the mic is shut while Jarvis speaks, so this cannot
+        fire mid-reply at all -- that is the trade, and it is the safe default.
         """
         self.gate.note_user_activity()
         if not self.config.voice.barge_in:
@@ -297,6 +324,7 @@ class Jarvis:
     def pause(self) -> None:
         """Stop looking and stop talking until resumed. The privacy panic button."""
         self.player.stop()
+        self._mic_closed_until = 0.0
         self.state.try_to(State.PAUSED, reason="paused")
         self.bus.publish("paused", paused=True)
 
@@ -354,6 +382,7 @@ class Jarvis:
             vision_enabled=self.config.vision.enabled,
             proactive_enabled=self.config.proactive.enabled,
             listening=self.listener is not None and self.listener.running,
+            microphone_open=self.microphone_is_open(),
             last_observation=last.summary if last else None,
         )
 

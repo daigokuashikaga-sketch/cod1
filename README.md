@@ -59,6 +59,7 @@ cp config.example.toml config.toml
 ## Use
 
 ```bash
+python -m jarvis run         # everything at once: orb + screen loop + microphone
 python -m jarvis doctor      # what is actually installed and configured
 python -m jarvis demo        # full pipeline, offline
 python -m jarvis chat        # text conversation (/help for commands)
@@ -73,6 +74,25 @@ cd desktop/src-tauri && cargo run   # the orb as a desktop overlay (see desktop/
 
 Vision and proactive speech are **off by default**. Turn them on in
 `config.toml` once you have read [docs/COSTS.md](docs/COSTS.md).
+
+## What it costs to think
+
+Conversation is cheap, but only if prompt caching actually works — and caching
+fails silently in two different ways. A cache entry is a byte-exact prefix
+match, so Jarvis splits the system prompt: the persona is the cached half, and
+the clock, your remembered facts and recalled context all sit *after* the
+breakpoint. And below a model-dependent minimum (512 tokens on Opus 5, 1,024 on
+Sonnet 5, 4,096 on Haiku 4.5) the API accepts the marker, caches nothing, and
+says nothing — so Jarvis estimates the prefix and declines to ask for caching
+that cannot happen. `jarvis doctor` tells you which case you are in:
+
+```
+ + prompt cache   no-op   static prefix ~336 tokens < 1024 for claude-sonnet-5
+```
+
+That is the shipped default: caching starts paying only once your static half
+grows (a long persona, house rules, a style guide). `jarvis memory` prints the
+read/write counters so you can check rather than assume.
 
 ## How it stays cheap
 
@@ -122,9 +142,14 @@ syllable is not clipped), closes after 700ms of quiet (so a pause mid-sentence
 does not split it), and is discarded untranscribed if it turns out to be under
 300ms of actual speech.
 
-Talking over a reply stops it: the listener fires `on_speech_start` the moment
-the VAD hears you — before any transcription — and the orchestrator cuts
-playback and moves `SPEAKING → LISTENING`.
+**It does not hear itself.** By default the microphone is closed while Jarvis is
+speaking, plus a short tail for the speakers to settle. Without that, a
+companion on speakers hears its own voice, decides someone is talking, and
+interrupts its own reply — the one bug that makes a voice assistant unusable in
+a room. The cost is that barge-in needs `voice.duplex = "full"`, which in turn
+needs headphones; then talking over a reply cuts it off mid-sentence, because
+the listener fires `on_speech_start` before any transcription and the
+orchestrator stops playback and moves `SPEAKING → LISTENING`.
 
 ## How it stays private
 
@@ -176,7 +201,7 @@ See [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) for the reasoning,
 ## Development
 
 ```bash
-pytest                       # 202 tests, offline, ~5s
+pytest                       # 227 tests, offline, ~6s
 ruff check src tests
 mypy
 ```
@@ -193,9 +218,9 @@ voice loop (microphone → VAD → STT → wake word → TTS → interruptible p
 with barge-in), gated screen vision, and the orb UI.
 
 What is *not* done: the desktop shell compiles and passes clippy but has never
-been launched on a real display, so its window behaviour is unverified;
-acoustic echo cancellation; streaming partial transcripts; and Live2D/VRM
-avatars — see
+been launched on a real display, so its window behaviour is unverified; true
+acoustic echo cancellation (half duplex avoids the problem instead of solving
+it); streaming partial transcripts; and Live2D/VRM avatars — see
 [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md#what-is-not-built-yet).
 
 MIT licensed.
